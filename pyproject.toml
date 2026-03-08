@@ -1,0 +1,33 @@
+[project]
+name = "mala-v1"
+version = "0.1.0"
+description = "Kinematic Engine backtesting framework"
+requires-python = ">=3.11"
+dependencies = [
+    "loguru>=0.7.0",
+    "numpy>=1.24.0",
+    "pandas>=2.1.0",
+    "polars>=0.20.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "rich>=13.7.0",
+    "tqdm>=4.66.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+norecursedirs = [".venv", "data", ".data_cache", "__pycache__"]
+
+[tool.uv]
+package = false

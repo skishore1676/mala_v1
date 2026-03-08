@@ -24,6 +24,9 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.oracle.results_db import ResultsDB
+
 
 console = Console()
 
@@ -260,6 +263,41 @@ def main() -> None:
     console.print(f"\nSaved cost summary -> [green]{combined_path}[/]")
     console.print(f"Saved gate report -> [green]{report_path}[/]")
     console.print(f"Saved shortlist -> [green]{shortlist_path}[/]")
+
+    db = ResultsDB()
+    run_id = db.start_run(
+        script="run_convergence_pipeline.py",
+        params={
+            "tickers": args.tickers,
+            "start": args.start.isoformat(),
+            "end": args.end.isoformat(),
+            "train_months": args.train_months,
+            "test_months": args.test_months,
+            "ratios": args.ratios,
+            "walkforward_min_signals": args.walkforward_min_signals,
+            "cost_grid": costs,
+            "gate_min_oos_windows": args.gate_min_oos_windows,
+            "gate_min_oos_signals": args.gate_min_oos_signals,
+            "gate_min_pct_positive": args.gate_min_pct_positive,
+            "gate_min_exp_r": args.gate_min_exp_r,
+        },
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_convergence_pipeline.py",
+        artifact_type="convergence_cost_summary",
+        source_path=str(combined_path),
+        df=combined,
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_convergence_pipeline.py",
+        artifact_type="convergence_gate_report",
+        source_path=str(report_path),
+        df=report,
+    )
+    db.finish_run(run_id)
+    console.print(f"Saved DB rows -> [green]{db.db_path}[/] (run_id={run_id})")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 from src.strategy.regime_router import RegimeRouterStrategy
+from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 
 
 def _minute_series(n: int, start: datetime = datetime(2025, 1, 2, 10, 0)) -> list[datetime]:
@@ -149,3 +150,86 @@ class TestRegimeRouterStrategy:
         strat = RegimeRouterStrategy()
         with pytest.raises(ValueError, match="requires columns"):
             strat.generate_signals(pl.DataFrame({"close": [100.0]}))
+
+
+class TestOpeningDriveClassifierStrategy:
+    def _build_two_day_df(self) -> pl.DataFrame:
+        rows: list[dict] = []
+
+        # Day 1: up opening drive, then continuation long.
+        day1_start = datetime(2025, 1, 2, 14, 30)  # 09:30 ET in UTC
+        for i in range(60):
+            ts = day1_start + timedelta(minutes=i)
+            close = 100.0 + (0.04 * i if i < 25 else 1.0)
+            if i == 30:
+                close = 101.3  # breakout above opening range high
+            rows.append({
+                "timestamp": ts,
+                "open": close - 0.01,
+                "high": close + 0.02,
+                "low": close - 0.02,
+                "close": close,
+                "volume": 3200 if i == 30 else 1000,
+                "accel_1m": 0.8 if i == 30 else 0.0,
+                "jerk_1m": 0.6 if i == 30 else 0.0,
+                "directional_mass": 450.0 if i == 30 else 10.0,
+            })
+
+        # Day 2: down opening drive, then failure long (reclaim above midpoint).
+        day2_start = datetime(2025, 1, 3, 14, 30)  # 09:30 ET in UTC
+        for i in range(60):
+            ts = day2_start + timedelta(minutes=i)
+            close = 100.0 - (0.04 * i if i < 25 else 1.0)
+            if i == 30:
+                close = 99.8  # above midpoint of opening range
+            rows.append({
+                "timestamp": ts,
+                "open": close - 0.01,
+                "high": close + 0.02,
+                "low": close - 0.02,
+                "close": close,
+                "volume": 3200 if i == 30 else 1000,
+                "accel_1m": 0.7 if i == 30 else 0.0,
+                "jerk_1m": 0.5 if i == 30 else 0.0,
+                "directional_mass": 400.0 if i == 30 else 10.0,
+            })
+
+        return pl.DataFrame(rows)
+
+    def test_generates_continue_and_fail_signals(self) -> None:
+        df = self._build_two_day_df()
+        strat = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=25,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+        )
+
+        out = strat.generate_signals(df)
+        sig = out.filter(pl.col("signal"))
+        assert sig.height == 2  # one per day in this fixture
+        assert set(sig["opening_drive_mode"].to_list()) == {"continue", "fail"}
+        assert set(sig["signal_direction"].to_list()) == {"long"}
+
+    def test_missing_columns_raise(self) -> None:
+        strat = OpeningDriveClassifierStrategy()
+        with pytest.raises(ValueError, match="requires columns"):
+            strat.generate_signals(pl.DataFrame({"close": [100.0]}))
+
+    def test_filter_flags_can_disable_long_and_fail_modes(self) -> None:
+        df = self._build_two_day_df()
+        strat = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=25,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            allow_long=False,
+            allow_short=True,
+            enable_continue=True,
+            enable_fail=False,
+            strategy_label="Opening Drive v2 (Short Continue)",
+        )
+        out = strat.generate_signals(df)
+        assert out.filter(pl.col("signal")).is_empty()

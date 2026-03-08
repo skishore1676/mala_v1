@@ -32,10 +32,12 @@ from src.chronos.storage import LocalStorage
 from src.config import settings
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.results_db import ResultsDB
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 from src.strategy.regime_router import RegimeRouterStrategy
+from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 from src.time_utils import et_date_expr
 
 
@@ -149,6 +151,26 @@ def main() -> None:
             trend_vol_ratio=1.0,
             compression_vol_ratio=0.9,
             trend_velocity_floor=0.015,
+        ),
+        OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=25,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.0015,
+            volume_multiplier=1.2,
+        ),
+        OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=25,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.0020,
+            breakout_buffer_pct=0.0005,
+            volume_multiplier=1.4,
+            allow_long=False,
+            allow_short=True,
+            enable_continue=True,
+            enable_fail=False,
+            strategy_label="Opening Drive v2 (Short Continue)",
         ),
     ]
 
@@ -277,6 +299,38 @@ def main() -> None:
 
     console.print(f"\nSaved walk-forward detail -> [green]{detail_path}[/]")
     console.print(f"Saved walk-forward summary -> [green]{agg_path}[/]")
+
+    db = ResultsDB()
+    run_id = db.start_run(
+        script="run_walk_forward_novel.py",
+        params={
+            "tickers": args.tickers,
+            "start": args.start.isoformat(),
+            "end": args.end.isoformat(),
+            "train_months": args.train_months,
+            "test_months": args.test_months,
+            "ratios": ratios,
+            "cost_r": args.cost_r,
+            "min_signals": args.min_signals,
+            "tag": args.tag,
+        },
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_walk_forward_novel.py",
+        artifact_type="walk_forward_novel_detail",
+        source_path=str(detail_path),
+        df=out_df,
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_walk_forward_novel.py",
+        artifact_type="walk_forward_novel_summary",
+        source_path=str(agg_path),
+        df=agg,
+    )
+    db.finish_run(run_id)
+    console.print(f"Saved DB rows -> [green]{db.db_path}[/] (run_id={run_id})")
 
 
 if __name__ == "__main__":

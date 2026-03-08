@@ -26,11 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
-from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
-from src.strategy.kinematic_ladder import KinematicLadderStrategy
-from src.strategy.compression_breakout import CompressionBreakoutStrategy
-from src.strategy.regime_router import RegimeRouterStrategy
-from src.config import settings
+from src.oracle.results_db import ResultsDB
+from src.strategy.factory import build_strategy_by_name
 from src.time_utils import et_date_expr
 
 
@@ -64,41 +61,6 @@ def latest_gate_report(out_dir: Path) -> Path:
     if not candidates:
         raise FileNotFoundError("No convergence_gate_report_*.csv found in data/results")
     return candidates[-1]
-
-
-def build_strategy(strategy_name: str):
-    if strategy_name == "Elastic Band Reversion":
-        return ElasticBandReversionStrategy(
-            z_score_threshold=2.0,
-            z_score_window=240,
-        )
-    if strategy_name == "Kinematic Ladder":
-        return KinematicLadderStrategy(
-            regime_window=30,
-            accel_window=10,
-            volume_multiplier=1.05,
-            volume_ma_period=settings.volume_ma_period,
-            use_time_filter=True,
-        )
-    if strategy_name == "Compression Expansion Breakout":
-        return CompressionBreakoutStrategy(
-            compression_window=20,
-            breakout_lookback=20,
-            compression_factor=0.85,
-            volume_ma_period=settings.volume_ma_period,
-            volume_multiplier=1.15,
-            use_time_filter=True,
-        )
-    if strategy_name == "Regime Router (Kinematic + Compression)":
-        return RegimeRouterStrategy(
-            vol_short_window=20,
-            vol_long_window=60,
-            trend_vel_window=30,
-            trend_vol_ratio=1.0,
-            compression_vol_ratio=0.9,
-            trend_velocity_floor=0.015,
-        )
-    raise ValueError(f"Unsupported strategy in holdout validator: {strategy_name}")
 
 
 def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_r: float) -> dict:
@@ -207,7 +169,7 @@ def main() -> None:
         if ticker not in ticker_frames:
             continue
 
-        strategy = build_strategy(strategy_name)
+        strategy = build_strategy_by_name(strategy_name)
         df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
         df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
 
@@ -306,6 +268,38 @@ def main() -> None:
 
     console.print(f"\nSaved holdout detail -> [green]{detail_path}[/]")
     console.print(f"Saved holdout summary -> [green]{summary_path}[/]")
+
+    db = ResultsDB()
+    run_id = db.start_run(
+        script="run_holdout_validation.py",
+        params={
+            "gate_report": str(gate_report_path),
+            "start": args.start.isoformat(),
+            "calibration_end": args.calibration_end.isoformat(),
+            "holdout_start": args.holdout_start.isoformat(),
+            "holdout_end": args.holdout_end.isoformat(),
+            "ratios": ratios,
+            "costs": costs,
+            "min_calibration_signals": args.min_calibration_signals,
+            "min_holdout_signals": args.min_holdout_signals,
+        },
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_holdout_validation.py",
+        artifact_type="holdout_validation_detail",
+        source_path=str(detail_path),
+        df=detail_df,
+    )
+    db.ingest_dataframe(
+        run_id=run_id,
+        script="run_holdout_validation.py",
+        artifact_type="holdout_validation_summary",
+        source_path=str(summary_path),
+        df=summary_df,
+    )
+    db.finish_run(run_id)
+    console.print(f"Saved DB rows -> [green]{db.db_path}[/] (run_id={run_id})")
 
 
 if __name__ == "__main__":

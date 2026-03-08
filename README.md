@@ -5,17 +5,20 @@ A state-of-the-art backtesting environment that models market price action as a 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install dependencies (uv)
+uv sync
+
+# Or pip fallback
 pip install -r requirements.txt
 
 # Set your Polygon.io API key
 echo "POLYGON_API_KEY=your_key_here" > .env
 
 # Run the full pipeline
-python main.py --tickers SPY --start 2024-01-01 --end 2024-12-31
+uv run python main.py --tickers SPY --start 2024-01-01 --end 2024-12-31
 
 # Run with cached data only (skip download)
-python main.py --skip-download --tickers SPY
+uv run python main.py --skip-download --tickers SPY
 ```
 
 ## What This Project Does
@@ -148,6 +151,17 @@ Signal when all gates are true:
 - Routes to `Kinematic Ladder` (trend) or `Compression Breakout` (compression).
 - Emits `route_regime` with directional signals.
 
+### Opening Drive Classifier (`src/strategy/opening_drive_classifier.py`)
+
+- Classifies opening impulse using first 25 minutes after `09:30` ET.
+- If opening drive is strong up/down:
+  - `continue` mode: trade range expansion in drive direction.
+  - `fail` mode: trade reclaim through opening midpoint against initial drive.
+- Uses acceleration, jerk, volume-vs-opening-baseline, and directional mass for participation confirmation.
+
+Variant now supported:
+- **Opening Drive v2 (Short Continue)**: short-only, continuation-only, stricter drive/volume filters.
+
 ## How We Backtest
 
 ### Standard Pipeline Backtest (EMA-style)
@@ -187,7 +201,7 @@ This does:
 Run:
 
 ```bash
-python scripts/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
+uv run python scripts/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
 ```
 
 This does:
@@ -197,12 +211,22 @@ This does:
 3. Produces ratio-grid robustness (`1.0, 1.25, 1.5, 2.0`) with Monte Carlo probability of positive expectancy.
 4. Saves outputs in `data/results/` as summary and robustness CSV/JSON artifacts.
 
+### Opening Drive Classifier Backtest
+
+Run:
+
+```bash
+uv run python scripts/run_opening_drive_classifier.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
+```
+
+This produces directional summary, robustness, and mode-level summary (`continue` vs `fail`).
+
 ### Walk-Forward Out-of-Sample Validation
 
 Run:
 
 ```bash
-python scripts/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
+uv run python scripts/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
 ```
 
 This does:
@@ -217,7 +241,7 @@ This does:
 Run:
 
 ```bash
-python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
+uv run python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
 ```
 
 This does:
@@ -232,7 +256,7 @@ This does:
 Run:
 
 ```bash
-python scripts/run_holdout_validation.py
+uv run python scripts/run_holdout_validation.py
 ```
 
 This does:
@@ -241,6 +265,21 @@ This does:
 2. Fits ratio on calibration period only.
 3. Evaluates holdout-only expectancy across friction stress assumptions.
 4. Emits final holdout pass/fail promotion decisions.
+
+### Execution Mapping + Monte Carlo Stress (M6)
+
+Run:
+
+```bash
+python scripts/run_execution_mapping.py
+```
+
+This does:
+
+1. Loads holdout-promoted candidates (`promote_to_execution_mapping`).
+2. Maps each to practical option structures (DTE, delta bands, entry/exit risk rules).
+3. Runs Monte Carlo execution stress with random fill/cost perturbations.
+4. Writes CSV/Markdown artifacts and stores rows in `results.db`.
 
 ## How Success Is Measured
 
@@ -260,10 +299,27 @@ Practical interpretation:
 - A setup can have good forward excursion stats but still fail as a tradable system if exits/holding rules produce poor expectancy.
 - A robust strategy should pass both filters: probabilistic edge and executable trade economics.
 
+## Local Results Database
+
+In addition to CSV/JSON files, core research scripts persist rows into:
+
+- `data/results/results.db`
+
+Tables:
+
+- `runs`: metadata for each script execution
+- `artifact_rows`: normalized rows with query keys (`ticker`, `strategy`, `direction`, `signals`, `confidence`, `exp_r`, `decision`) + full JSON payload
+
+Quick query:
+
+```bash
+uv run python scripts/query_results_db.py --artifact-type walk_forward_novel_summary --limit 20
+```
+
 ## Running Tests
 
 ```bash
-./.venv/bin/pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ## Configuration
