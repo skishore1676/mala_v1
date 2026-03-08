@@ -86,6 +86,7 @@ Monte Carlo robustness uses bootstrap/binomial sampling of confidence to estimat
 
 See details: `docs/EXPANDED_UNIVERSE_RESULTS_2026-03-08.md`.
 Convergence execution details: `docs/CONVERGENCE_PLAN_2026-03-08.md`.
+Holdout confirmation details: `docs/HOLDOUT_VALIDATION_2026-03-08.md`.
 
 ## Practical Interpretation For Trading
 

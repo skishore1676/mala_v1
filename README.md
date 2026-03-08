@@ -215,6 +215,21 @@ This does:
 3. Applies promotion gates (windows, signal count, OOS hit-rate, expectancy floor).
 4. Produces a ranked shortlist for holdout promotion.
 
+### Holdout Validation (Promoted Candidates Only)
+
+Run:
+
+```bash
+python scripts/run_holdout_validation.py
+```
+
+This does:
+
+1. Loads only candidates promoted by convergence gates.
+2. Fits ratio on calibration period only.
+3. Evaluates holdout-only expectancy across friction stress assumptions.
+4. Emits final holdout pass/fail promotion decisions.
+
 ## How Success Is Measured
 
 Use both layers below; they answer different questions:

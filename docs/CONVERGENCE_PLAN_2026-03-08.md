@@ -52,7 +52,7 @@ Converge to a small set of strategies with **repeatable out-of-sample edge** tha
   - Evaluate on untouched holdout window.
 - Pass criteria:
   - Positive expectancy and acceptable stability on holdout.
-- Current status: **Pending**
+- Current status: **Pass (initial promoted set)**
 
 ## M6: Execution Mapping For Options (Pre-Live Gate)
 - Scope:
@@ -103,4 +103,7 @@ M4 result:
 
 Updated status:
 - M4: **Pass (first batch)**
-- M5: **Next** (holdout confirmation for these 3 candidates)
+- M5: **Pass (2025-12-01 to 2026-02-28 holdout)**
+
+See holdout details:
+- `docs/HOLDOUT_VALIDATION_2026-03-08.md`
