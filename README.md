@@ -200,6 +200,21 @@ This does:
 3. Tests selected ratio on the following out-of-sample window.
 4. Saves detailed and aggregated OOS results in `data/results/`.
 
+### Convergence Gate Pipeline
+
+Run:
+
+```bash
+python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
+```
+
+This does:
+
+1. Runs walk-forward across multiple friction assumptions.
+2. Aggregates candidate robustness across costs.
+3. Applies promotion gates (windows, signal count, OOS hit-rate, expectancy floor).
+4. Produces a ranked shortlist for holdout promotion.
+
 ## How Success Is Measured
 
 Use both layers below; they answer different questions:

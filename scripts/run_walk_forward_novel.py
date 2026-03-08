@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ratios", default="1.0,1.25,1.5,2.0")
     parser.add_argument("--cost-r", type=float, default=0.05)
     parser.add_argument("--min-signals", type=int, default=20)
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="Optional tag appended to output filenames (for multi-run comparisons).",
+    )
     return parser.parse_args()
 
 
@@ -153,7 +158,7 @@ def main() -> None:
     console.rule("[bold cyan]Walk-Forward Evaluation[/]")
     console.print(
         f"Tickers: {args.tickers} | Range: {args.start} -> {args.end} | "
-        f"Train/Test months: {args.train_months}/{args.test_months} | Ratios: {ratios}"
+        f"Train/Test months: {args.train_months}/{args.test_months} | Ratios: {ratios} | cost_r={args.cost_r}"
     )
 
     for ticker in args.tickers:
@@ -264,8 +269,10 @@ def main() -> None:
     out_dir = Path("data/results")
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().isoformat()
-    detail_path = out_dir / f"walk_forward_novel_detail_{stamp}.csv"
-    agg_path = out_dir / f"walk_forward_novel_summary_{stamp}.csv"
+    safe_tag = args.tag.strip().replace(" ", "_")
+    suffix = f"_{safe_tag}" if safe_tag else ""
+    detail_path = out_dir / f"walk_forward_novel_detail_{stamp}{suffix}.csv"
+    agg_path = out_dir / f"walk_forward_novel_summary_{stamp}{suffix}.csv"
     out_df.write_csv(detail_path)
     agg.write_csv(agg_path)
 

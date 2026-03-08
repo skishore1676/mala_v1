@@ -34,6 +34,10 @@
 - File: `scripts/run_walk_forward_novel.py`
 - Purpose: choose ratio in train window, evaluate in next OOS window.
 
+4. **Convergence pipeline (multi-cost gate runner)**
+- File: `scripts/run_convergence_pipeline.py`
+- Purpose: run walk-forward at multiple friction assumptions and promote only candidates that pass strict robustness gates.
+
 ### Data-Time Alignment Fix
 
 - Added timezone utilities (`src/time_utils.py`) to convert stored UTC timestamps to ET.
@@ -81,6 +85,7 @@ Monte Carlo robustness uses bootstrap/binomial sampling of confidence to estimat
 - This supports a **ticker-specialized deployment** view rather than one universal parameter set.
 
 See details: `docs/EXPANDED_UNIVERSE_RESULTS_2026-03-08.md`.
+Convergence execution details: `docs/CONVERGENCE_PLAN_2026-03-08.md`.
 
 ## Practical Interpretation For Trading
 
