@@ -6,6 +6,7 @@
 
 1. **Elastic Band Reversion**
 - Mean-reversion around VPOC stretch + exhaustion flip.
+- Upgraded to dynamic z-score stretch and directional mass gating.
 - File: `src/strategy/elastic_band_reversion.py`
 
 2. **Kinematic Ladder**
@@ -43,6 +44,14 @@
 - Added timezone utilities (`src/time_utils.py`) to convert stored UTC timestamps to ET.
 - Updated strategy/session filters and walk-forward/date boundaries to use ET session time.
 - This prevents accidental timezone drift in open/close filters.
+
+### Physics Upgrade: Directional Mass
+
+- Added directional mass columns in Newton:
+  - `internal_strength`
+  - `directional_mass`
+  - `directional_mass_ma_20`
+- Purpose: replace scalar volume participation with directional participation signal.
 
 ## Measurement Logic (Current)
 
@@ -87,6 +96,14 @@ Monte Carlo robustness uses bootstrap/binomial sampling of confidence to estimat
 See details: `docs/EXPANDED_UNIVERSE_RESULTS_2026-03-08.md`.
 Convergence execution details: `docs/CONVERGENCE_PLAN_2026-03-08.md`.
 Holdout confirmation details: `docs/HOLDOUT_VALIDATION_2026-03-08.md`.
+Post-upgrade directional mass evaluation: `docs/POST_UPGRADE_DIRECTIONAL_MASS_EVAL_2026-03-08.md`.
+
+### Post-Upgrade Reality Check (Directional Mass + Z-Score Elastic)
+
+- The upgraded Elastic logic became much more selective (signal count dropped materially).
+- Under strict convergence gates, promoted candidates changed from `3` to `0`.
+- Some short-side pockets emerged (`IWM/TSLA/META/QQQ`), but not with enough robust sample under current gates.
+- End-of-day call: keep the upgrade, but retune the new Elastic hyperparameters before promoting live candidates.
 
 ## Practical Interpretation For Trading
 
@@ -97,10 +114,13 @@ Holdout confirmation details: `docs/HOLDOUT_VALIDATION_2026-03-08.md`.
 ## Recommended Next Steps
 
 1. **Narrow focus:**
-- Optimize only `Elastic Band Reversion` (SPY first, then QQQ/IWM portability check).
+- Optimize only upgraded `Elastic Band Reversion` with:
+  - `z_score_threshold`
+  - `z_score_window`
+  - optional directional-mass magnitude filter
 
 2. **Structured sweep:**
-- Sweep: `stretch_pct`, `volume_multiplier`, session window, and optional trend filter.
+- Sweep new parameters above across short-side candidate tickers first (`IWM/QQQ/TSLA/META`).
 - Keep one untouched OOS segment as a final holdout.
 
 3. **Execution bridge to options:**

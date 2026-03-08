@@ -42,11 +42,11 @@ class PhysicsEngine:
 
     def enrich(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Accept a raw OHLCV DataFrame (must have 'close', 'high', 'low',
-        'volume' columns) and return a new DataFrame with physics columns
-        appended.
+        Accept a raw OHLCV DataFrame (must have 'open', 'high', 'low',
+        'close', 'volume' columns) and return a new DataFrame with
+        physics columns appended.
         """
-        required = {"close", "high", "low", "volume"}
+        required = {"open", "high", "low", "close", "volume"}
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"DataFrame is missing required columns: {missing}")
@@ -58,6 +58,7 @@ class PhysicsEngine:
         df = self._add_jerk(df)
         df = self._add_emas(df)
         df = self._add_volume_ma(df)
+        df = self._add_directional_mass(df)
         df = self._add_vpoc(df)
 
         logger.info("Physics enrichment complete – {} columns total", len(df.columns))
@@ -111,6 +112,33 @@ class PhysicsEngine:
             pl.col("volume")
             .rolling_mean(window_size=self.volume_ma_period)
             .alias(f"volume_ma_{self.volume_ma_period}")
+        )
+
+    # ── Directional Mass (Pseudo Delta-Volume) ──────────────────────────
+
+    def _add_directional_mass(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Estimate within-bar participation direction and scale by volume:
+          internal_strength = ((close - low) - (high - close)) / (high - low)
+          directional_mass = volume * internal_strength
+        """
+        range_expr = pl.col("high") - pl.col("low")
+        internal_strength = (
+            pl.when(range_expr == 0)
+            .then(pl.lit(0.0))
+            .otherwise(
+                ((pl.col("close") - pl.col("low")) - (pl.col("high") - pl.col("close")))
+                / range_expr
+            )
+        )
+
+        return df.with_columns([
+            internal_strength.alias("internal_strength"),
+            (pl.col("volume") * internal_strength).alias("directional_mass"),
+        ]).with_columns(
+            pl.col("directional_mass")
+            .rolling_mean(window_size=self.volume_ma_period)
+            .alias(f"directional_mass_ma_{self.volume_ma_period}")
         )
 
     # ── VPOC (Volume Point of Control) ───────────────────────────────────

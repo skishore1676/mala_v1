@@ -107,3 +107,12 @@ Updated status:
 
 See holdout details:
 - `docs/HOLDOUT_VALIDATION_2026-03-08.md`
+
+## Post-Upgrade Note (Directional Mass + Dynamic Elasticity)
+
+After upgrading Elastic Band to use directional mass and z-score stretch:
+- strict M4 gates currently produce **0 promoted** candidates.
+- M5 is therefore **not passed for the upgraded config yet**.
+
+Details:
+- `docs/POST_UPGRADE_DIRECTIONAL_MASS_EVAL_2026-03-08.md`

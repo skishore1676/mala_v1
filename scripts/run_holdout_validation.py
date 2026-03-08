@@ -69,9 +69,8 @@ def latest_gate_report(out_dir: Path) -> Path:
 def build_strategy(strategy_name: str):
     if strategy_name == "Elastic Band Reversion":
         return ElasticBandReversionStrategy(
-            stretch_pct=0.002,
-            volume_multiplier=1.15,
-            volume_ma_period=settings.volume_ma_period,
+            z_score_threshold=2.0,
+            z_score_window=240,
         )
     if strategy_name == "Kinematic Ladder":
         return KinematicLadderStrategy(

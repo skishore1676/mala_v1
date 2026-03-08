@@ -34,7 +34,8 @@ class TestPhysicsEngine:
         expected_cols = {
             "velocity_1m", "accel_1m", "jerk_1m",
             "ema_4", "ema_8", "ema_12",
-            "volume_ma_20", "vpoc_4h",
+            "volume_ma_20", "internal_strength",
+            "directional_mass", "directional_mass_ma_20", "vpoc_4h",
         }
         assert expected_cols.issubset(set(result.columns))
 
@@ -82,6 +83,28 @@ class TestPhysicsEngine:
         assert np.isnan(vpoc[lookback - 1])
         # After lookback window, VPOC should be filled
         assert not np.isnan(vpoc[lookback])
+
+    def test_directional_mass_formula_and_zero_range_handling(self) -> None:
+        df = pl.DataFrame({
+            "open": [10.0, 10.0, 10.0],
+            "high": [11.0, 10.0, 12.0],
+            "low": [9.0, 10.0, 10.0],
+            "close": [10.5, 10.0, 11.0],
+            "volume": [1000.0, 2000.0, 1500.0],
+        })
+        engine = PhysicsEngine(vpoc_lookback=2, volume_ma_period=2)
+        result = engine.enrich(df)
+
+        strength = result["internal_strength"].to_numpy()
+        dmass = result["directional_mass"].to_numpy()
+        dmass_ma = result["directional_mass_ma_2"].to_numpy()
+
+        np.testing.assert_almost_equal(strength[0], 0.5, decimal=10)
+        np.testing.assert_almost_equal(dmass[0], 500.0, decimal=10)
+        np.testing.assert_almost_equal(strength[1], 0.0, decimal=10)  # high == low
+        np.testing.assert_almost_equal(dmass[1], 0.0, decimal=10)
+        np.testing.assert_almost_equal(dmass_ma[1], 250.0, decimal=10)
+        np.testing.assert_almost_equal(dmass_ma[2], 0.0, decimal=10)
 
     def test_raises_on_missing_columns(self) -> None:
         df = pl.DataFrame({"close": [1.0, 2.0]})

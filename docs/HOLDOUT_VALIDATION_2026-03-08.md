@@ -1,5 +1,8 @@
 # Holdout Validation (M5) — 2026-03-08
 
+> Note: This document covers the **pre directional-mass/z-score Elastic config** that passed M5 earlier in the day.  
+> A separate post-upgrade evaluation is documented in `docs/POST_UPGRADE_DIRECTIONAL_MASS_EVAL_2026-03-08.md`.
+
 ## Objective
 
 Validate only promoted candidates from M4 on a holdout segment that is not used for ratio fitting.

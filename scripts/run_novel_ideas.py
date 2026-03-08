@@ -158,9 +158,8 @@ def main() -> None:
 
     strategies = [
         ElasticBandReversionStrategy(
-            stretch_pct=0.002,
-            volume_multiplier=1.15,
-            volume_ma_period=settings.volume_ma_period,
+            z_score_threshold=2.0,
+            z_score_window=240,
         ),
         KinematicLadderStrategy(
             regime_window=30,

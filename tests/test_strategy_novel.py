@@ -18,23 +18,22 @@ def _minute_series(n: int, start: datetime = datetime(2025, 1, 2, 10, 0)) -> lis
 class TestElasticBandReversionStrategy:
     def test_generates_long_and_short_signals(self) -> None:
         df = pl.DataFrame({
-            "close": [99.0, 101.0],
-            "vpoc_4h": [100.0, 100.0],
-            "velocity_1m": [-0.2, 0.2],
-            "jerk_1m": [0.1, -0.1],
-            "volume": [3000, 3000],
-            "volume_ma_20": [2000.0, 2000.0],
+            "close": [100.0, 100.1, 99.9, 98.0, 102.0],
+            "vpoc_4h": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "velocity_1m": [0.0, 0.1, -0.1, -0.3, 0.3],
+            "jerk_1m": [0.0, -0.1, 0.1, 0.2, -0.2],
+            "directional_mass": [0.0, 5.0, 10.0, 500.0, -500.0],
         })
 
         strat = ElasticBandReversionStrategy(
-            stretch_pct=0.005,
-            volume_ma_period=20,
-            volume_multiplier=1.1,
+            z_score_threshold=1.0,
+            z_score_window=3,
         )
         out = strat.generate_signals(df)
 
-        assert out["signal"].to_list() == [True, True]
-        assert out["signal_direction"].to_list() == ["long", "short"]
+        directions = [x for x in out["signal_direction"].to_list() if x is not None]
+        assert "long" in directions
+        assert "short" in directions
 
     def test_missing_columns_raise(self) -> None:
         strat = ElasticBandReversionStrategy()

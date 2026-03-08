@@ -8,12 +8,9 @@ Mean-reversion hypothesis:
 
 from __future__ import annotations
 
-from typing import Optional
-
 import polars as pl
 from loguru import logger
 
-from src.config import settings
 from src.strategy.base import BaseStrategy
 
 
@@ -22,13 +19,11 @@ class ElasticBandReversionStrategy(BaseStrategy):
 
     def __init__(
         self,
-        stretch_pct: float = 0.0025,
-        volume_ma_period: int = settings.volume_ma_period,
-        volume_multiplier: float = 1.2,
+        z_score_threshold: float = 2.0,
+        z_score_window: int = 240,
     ) -> None:
-        self.stretch_pct = stretch_pct
-        self.volume_ma_period = volume_ma_period
-        self.volume_multiplier = volume_multiplier
+        self.z_score_threshold = z_score_threshold
+        self.z_score_window = z_score_window
 
     @property
     def name(self) -> str:
@@ -40,30 +35,40 @@ class ElasticBandReversionStrategy(BaseStrategy):
             "vpoc_4h",
             "velocity_1m",
             "jerk_1m",
-            "volume",
-            f"volume_ma_{self.volume_ma_period}",
+            "directional_mass",
         }
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
 
-        vol_ma_col = f"volume_ma_{self.volume_ma_period}"
-
-        distance_pct = (pl.col("close") - pl.col("vpoc_4h")) / pl.col("vpoc_4h")
-        volume_gate = pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
+        df = df.with_columns([
+            ((pl.col("close") - pl.col("vpoc_4h")) / pl.col("vpoc_4h")).alias("_dist_pct"),
+        ]).with_columns([
+            pl.col("_dist_pct")
+            .rolling_mean(window_size=self.z_score_window)
+            .alias("_dist_mean"),
+            pl.col("_dist_pct")
+            .rolling_std(window_size=self.z_score_window)
+            .alias("_dist_std"),
+        ]).with_columns([
+            pl.when(pl.col("_dist_std").is_not_null() & (pl.col("_dist_std") > 0))
+            .then((pl.col("_dist_pct") - pl.col("_dist_mean")) / pl.col("_dist_std"))
+            .otherwise(pl.lit(None))
+            .alias("_z_score"),
+        ])
 
         long_signal = (
-            (distance_pct <= -self.stretch_pct)
+            (pl.col("_z_score") <= -self.z_score_threshold)
             & (pl.col("velocity_1m") < 0)
             & (pl.col("jerk_1m") > 0)
-            & volume_gate
+            & (pl.col("directional_mass") > 0)
         )
 
         short_signal = (
-            (distance_pct >= self.stretch_pct)
+            (pl.col("_z_score") >= self.z_score_threshold)
             & (pl.col("velocity_1m") > 0)
             & (pl.col("jerk_1m") < 0)
-            & volume_gate
+            & (pl.col("directional_mass") < 0)
         )
 
         df = df.with_columns([
@@ -74,7 +79,7 @@ class ElasticBandReversionStrategy(BaseStrategy):
             .then(pl.lit("short"))
             .otherwise(pl.lit(None))
             .alias("signal_direction"),
-        ])
+        ]).drop(["_dist_pct", "_dist_mean", "_dist_std", "_z_score"])
 
         total = df.filter(pl.col("signal")).height
         longs = df.filter(pl.col("signal_direction") == "long").height

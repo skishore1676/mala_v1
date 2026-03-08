@@ -49,7 +49,8 @@ Polygon API (1-min OHLCV)
   -> Chronos storage saves daily parquet: data/<TICKER>/<YYYY-MM-DD>.parquet
   -> load_bars(ticker, start, end)
   -> Newton enrich():
-       velocity_1m, accel_1m, jerk_1m, ema_*, volume_ma_*, vpoc_4h
+       velocity_1m, accel_1m, jerk_1m, ema_*, volume_ma_*,
+       internal_strength, directional_mass, directional_mass_ma_*, vpoc_4h
   -> Strategy generate_signals():
        signal (and signal_direction for directional strategies)
   -> Oracle:
@@ -69,6 +70,9 @@ Polygon API (1-min OHLCV)
 - `jerk_1m = accel_1m[t] - accel_1m[t-1]`
 - `ema_p`: exponential moving average of `close` for period `p`
 - `volume_ma_n`: rolling mean of `volume` over `n` bars
+- `internal_strength = ((close - low) - (high - close)) / (high - low)` (0 when `high == low`)
+- `directional_mass = volume * internal_strength`
+- `directional_mass_ma_n`: rolling mean of `directional_mass` over `n` bars
 - `vpoc_4h`: most volume-concentrated rounded price in rolling `vpoc_lookback_bars` window (default 240 bars)
 
 ### Forward Metrics (Oracle)
@@ -129,6 +133,14 @@ Signal when all gates are true:
 - Trigger on 1-min cross-and-reclaim of VMA
 - Time filter: default entry window `09:33` to `10:30` ET
 - Emits both `signal` and `signal_direction` (`long`/`short`)
+
+### Elastic Band Reversion (`src/strategy/elastic_band_reversion.py`)
+
+- Uses dynamic stretch via rolling z-score of VPOC distance (instead of fixed % stretch).
+- Long/short still require velocity+jerk exhaustion flip.
+- Participation gate uses directional mass polarity:
+  - Long requires `directional_mass > 0`
+  - Short requires `directional_mass < 0`
 
 ### Regime Router (`src/strategy/regime_router.py`)
 
