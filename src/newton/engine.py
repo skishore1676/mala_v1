@@ -19,6 +19,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.time_utils import et_time_expr
 
 
 class PhysicsEngine:
@@ -180,8 +181,8 @@ class PhysicsEngine:
 
             before = len(df)
             df = df.filter(
-                (pl.col("timestamp").dt.time() >= mkt_open)
-                & (pl.col("timestamp").dt.time() <= mkt_close)
+                (et_time_expr("timestamp") >= mkt_open)
+                & (et_time_expr("timestamp") <= mkt_close)
             )
             dropped = before - len(df)
             if dropped > 0:
@@ -258,4 +259,3 @@ class PhysicsEngine:
             len(df_5m),
         )
         return df
-

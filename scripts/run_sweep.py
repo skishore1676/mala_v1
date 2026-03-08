@@ -31,6 +31,7 @@ from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.reporting import ExperimentReporter
 from src.config import DATA_DIR
+from src.time_utils import et_time_expr
 
 console = Console()
 
@@ -156,8 +157,7 @@ EXPERIMENTS: List[ExperimentConfig] = [
 # ── Custom Signal Generator ──────────────────────────────────────────────────
 
 # Opening bell window: 9:30 AM – 10:04 AM ET
-# Polygon timestamps are in ET. Hour 9 starts at 9:30 (market open).
-# First 35 minutes = 9:30–10:04 → hour == 9  OR  (hour == 10 AND minute < 5)
+# Stored timestamps are UTC; convert to ET before applying opening-window filters.
 OPENING_START = time(9, 30)
 OPENING_END = time(10, 5)
 
@@ -171,8 +171,8 @@ def generate_signals(df: pl.DataFrame, cfg: ExperimentConfig) -> pl.DataFrame:
 
     # ── Time-of-day gate: first 35 minutes of market open ────────────────
     gates.append(
-        (pl.col("timestamp").dt.time() >= OPENING_START)
-        & (pl.col("timestamp").dt.time() < OPENING_END)
+        (et_time_expr("timestamp") >= OPENING_START)
+        & (et_time_expr("timestamp") < OPENING_END)
     )
 
     ema_cols = [f"ema_{p}" for p in sorted(cfg.ema_periods)]

@@ -81,7 +81,7 @@ class LocalStorage:
         if not files:
             return pl.DataFrame()
 
-        frames = [pl.read_parquet(f) for f in files]
+        frames = [self._normalize_loaded_frame(pl.read_parquet(f)) for f in files]
         df = pl.concat(frames).sort("timestamp")
         logger.info(
             "Loaded {} bars for {} ({} files)",
@@ -146,7 +146,7 @@ class LocalStorage:
         if "timestamp" in df.columns:
             df = df.with_columns(
                 (pl.col("timestamp") * 1_000)
-                .cast(pl.Datetime("us"))
+                .cast(pl.Datetime("us", time_zone="UTC"))
                 .alias("timestamp")
             )
 
@@ -160,6 +160,18 @@ class LocalStorage:
         ]
         present = [c for c in canonical if c in df.columns]
         return df.select(present)
+
+    @staticmethod
+    def _normalize_loaded_frame(df: pl.DataFrame) -> pl.DataFrame:
+        """Coerce cached frames to a stable schema across cache generations."""
+        if "timestamp" in df.columns:
+            df = df.with_columns(
+                pl.col("timestamp")
+                .cast(pl.Int64)
+                .cast(pl.Datetime("us", time_zone="UTC"))
+                .alias("timestamp")
+            )
+        return df
 
     @staticmethod
     def _file_in_range(

@@ -18,6 +18,7 @@ from typing import List, Optional
 import numpy as np
 import polars as pl
 from loguru import logger
+from src.time_utils import et_time_expr, et_date_expr
 
 
 @dataclass
@@ -150,10 +151,10 @@ class TradeSimulator:
         vma_5m = df[self.vma_5m_col].to_numpy()
 
         # Pre-compute bar times for EOD check
-        bar_times = df.select(pl.col("timestamp").dt.time().alias("t"))["t"].to_list()
+        bar_times = df.select(et_time_expr("timestamp").alias("t"))["t"].to_list()
 
         # Pre-compute dates for session boundary tracking
-        dates = df.select(pl.col("timestamp").dt.date().alias("d"))["d"].to_list()
+        dates = df.select(et_date_expr("timestamp").alias("d"))["d"].to_list()
 
         n = len(df)
         trades: List[Trade] = []

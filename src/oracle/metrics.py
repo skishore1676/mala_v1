@@ -19,6 +19,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.time_utils import et_date_expr
 
 
 class MetricsCalculator:
@@ -169,7 +170,7 @@ class MetricsCalculator:
 
         # Pre-compute date for each bar to find end-of-day boundaries
         dates = df.select(
-            pl.col("timestamp").dt.date().alias("trade_date")
+            et_date_expr("timestamp").alias("trade_date")
         )["trade_date"].to_list()
 
         # Build day-end index lookup: for each bar, the last bar of that day
@@ -288,6 +289,12 @@ class MetricsCalculator:
             total = subset.height
             wins = subset.filter(pl.col("win_2to1")).height
             confidence = wins / total if total > 0 else 0.0
+            mean_mfe = float(subset["forward_mfe_eod"].mean())
+            mean_mae = float(subset["forward_mae_eod"].mean())
+            if np.isnan(mean_mfe) or np.isnan(mean_mae) or mean_mae <= 0:
+                ratio = None
+            else:
+                ratio = round(mean_mfe / mean_mae, 2)
 
             row = {
                 "direction": label,
@@ -295,15 +302,11 @@ class MetricsCalculator:
                 "wins": wins,
                 "losses": total - wins,
                 "confidence_2to1": round(confidence, 4),
-                "avg_mfe_eod": round(float(subset["forward_mfe_eod"].mean()), 4),
-                "avg_mae_eod": round(float(subset["forward_mae_eod"].mean()), 4),
+                "avg_mfe_eod": round(mean_mfe, 4) if not np.isnan(mean_mfe) else None,
+                "avg_mae_eod": round(mean_mae, 4) if not np.isnan(mean_mae) else None,
                 "median_mfe_eod": round(float(subset["forward_mfe_eod"].median()), 4),
                 "median_mae_eod": round(float(subset["forward_mae_eod"].median()), 4),
-                "avg_mfe_mae_ratio": round(
-                    float(subset["forward_mfe_eod"].mean())
-                    / max(float(subset["forward_mae_eod"].mean()), 0.0001),
-                    2,
-                ),
+                "avg_mfe_mae_ratio": ratio,
             }
 
             # Add snapshot window metrics if available
@@ -320,14 +323,19 @@ class MetricsCalculator:
 
         summary = pl.DataFrame(rows)
         for _, row_data in enumerate(rows):
+            ratio_display = (
+                f"{row_data['avg_mfe_mae_ratio']:.2f}x"
+                if row_data["avg_mfe_mae_ratio"] is not None
+                else "n/a"
+            )
             logger.info(
                 "Summary [{}]: {} signals, {} wins, confidence {:.2%}, "
-                "MFE/MAE ratio {:.2f}x",
+                "MFE/MAE ratio {}",
                 row_data["direction"],
                 row_data["total_signals"],
                 row_data["wins"],
                 row_data["confidence_2to1"],
-                row_data["avg_mfe_mae_ratio"],
+                ratio_display,
             )
 
         return summary
@@ -355,4 +363,3 @@ class MetricsCalculator:
         )
         logger.info("Directional trade log contains {} entries", len(log))
         return log
-

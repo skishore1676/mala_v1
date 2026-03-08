@@ -34,6 +34,7 @@ from rich.table import Table
 from src.config import settings
 from src.chronos.storage import LocalStorage
 from src.newton.market_impulse import enrich_impulse_columns
+from src.time_utils import et_time_expr, et_date_expr
 
 console = Console()
 
@@ -126,8 +127,8 @@ def filter_market_hours(df: pl.DataFrame) -> pl.DataFrame:
     mkt_close = dt_time(16, 0)
     before = len(df)
     df = df.filter(
-        (pl.col("timestamp").dt.time() >= mkt_open)
-        & (pl.col("timestamp").dt.time() <= mkt_close)
+        (et_time_expr("timestamp") >= mkt_open)
+        & (et_time_expr("timestamp") <= mkt_close)
     )
     logger.info("Market-hours filter: {} → {} bars", before, len(df))
     return df
@@ -199,10 +200,10 @@ def run_stage_flip_simulation(
     close = df_enriched["close"].to_numpy()
     timestamps = df_enriched["timestamp"].to_list()
     bar_times = df_enriched.select(
-        pl.col("timestamp").dt.time().alias("t")
+        et_time_expr("timestamp").alias("t")
     )["t"].to_list()
     dates = df_enriched.select(
-        pl.col("timestamp").dt.date().alias("d")
+        et_date_expr("timestamp").alias("d")
     )["d"].to_list()
 
     n = len(df_enriched)

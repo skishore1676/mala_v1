@@ -27,6 +27,7 @@ import polars as pl
 from loguru import logger
 
 from src.strategy.base import BaseStrategy
+from src.time_utils import et_time_expr
 
 
 class MarketImpulseStrategy(BaseStrategy):
@@ -74,9 +75,9 @@ class MarketImpulseStrategy(BaseStrategy):
             )
 
         # ── Time Filter ─────────────────────────────────────────────────
-        # Extract time-of-day from timestamp (in ET – data should be ET)
+        # Extract ET time-of-day from stored UTC timestamp
         df = df.with_columns(
-            pl.col("timestamp").dt.time().alias("_bar_time")
+            et_time_expr("timestamp").alias("_bar_time")
         )
 
         time_filter = (
