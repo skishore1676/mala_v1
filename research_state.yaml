@@ -1,0 +1,74 @@
+# Research State Registry
+# Controls which strategies are active in the pipeline.
+# Statuses: active | candidate | under_eval | dead
+#
+# Scripts read this file to skip dead strategies automatically.
+# Update after each research cycle based on OOS evidence.
+#
+# Last updated: 2026-03-09 (after convergence pipeline + NaN fix)
+
+strategies:
+
+  "Elastic Band Reversion":
+    status: active
+    tickers: [AAPL, META, TSLA, QQQ, IWM]
+    directions: [short, combined, long]
+    optimal_params:
+      # Per-ticker from P0 grid search (z_score_threshold x z_score_window):
+      # AAPL: z=2.5-3.0 / w=240-360   | TSLA: z=1.75 / w=120 (100% windows)
+      # META: z=1.0-1.25 / w=240-360 (short, 100% windows)
+      # QQQ:  z=2.5 / w=360           | IWM: z=2.0 / w=240
+      use_directional_mass: true  # P1 ablation confirms DM is net positive
+    notes: >
+      SPY excluded — no edge under any config.
+      Convergence pipeline (2026-03-09) promoted 10 parameter/direction variants to holdout.
+      Standouts: META short (z=1.0, w=240, E[R]=+0.135, 100% wins); TSLA short (z=1.75, w=120, E[R]=+0.133, 100% wins).
+      Holdout Validation (2026-03-09): TSLA short (z=1.25 / w=360) successfully passed extended 3-week untouched holdout with E[R] = +0.51 over 36 signals!
+
+  "Opening Drive Classifier":
+    status: candidate
+    tickers: [SPY]
+    directions: [short]
+    optimal_params:
+      opening_window_minutes: 25
+      entry_start_offset_minutes: 25
+      entry_end_offset_minutes: 120
+      min_drive_return_pct: 0.0015
+      volume_multiplier: 1.2
+    notes: >
+      Short-continue variant showed early promise.
+      Not yet walk-forward OOS validated at sufficient scale.
+      Included in convergence run to evaluate.
+
+  "Kinematic Ladder":
+    status: candidate
+    tickers: [TSLA]
+    directions: [short]
+    optimal_params:
+      regime_window: 20
+      accel_window: 8
+      use_volume_filter: false
+    evidence: >
+      P1 ablation (2026-03-09): volume gate kills KL entirely — zero valid cells with volume ON.
+      Without volume filter, TSLA short avg OOS E[R]=+0.22, 100% window hit rate.
+      No edge found for any other ticker even without volume gate.
+    notes: >
+      TSLA short only, volume filter OFF. Included in convergence run.
+      If gates fail, mark dead. If gates pass, promote to active.
+
+  "Compression Expansion Breakout":
+    status: dead
+    tickers: []
+    directions: []
+    evidence: >
+      P1 grid search (2026-03-09): best result TSLA cw=15, cf=0.70, avg E[R]=+0.014, 67% windows.
+      E[R] too thin and unstable. Volume filter removal worsens results.
+    notes: >
+      Not included in convergence pipeline runs.
+
+  "Regime Router (Kinematic + Compression)":
+    status: dead
+    tickers: []
+    directions: []
+    notes: >
+      Routes into dead sub-strategies. Not included in convergence pipeline runs.

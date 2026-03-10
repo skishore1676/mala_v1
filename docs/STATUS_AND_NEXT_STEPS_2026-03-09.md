@@ -1,4 +1,4 @@
-# Status And Next Steps (2026-03-08)
+# Status And Next Steps (2026-03-09)
 
 ## What We Built
 
@@ -98,18 +98,22 @@ Convergence execution details: `docs/CONVERGENCE_PLAN_2026-03-08.md`.
 Holdout confirmation details: `docs/HOLDOUT_VALIDATION_2026-03-08.md`.
 Post-upgrade directional mass evaluation: `docs/POST_UPGRADE_DIRECTIONAL_MASS_EVAL_2026-03-08.md`.
 
-### Post-Upgrade Reality Check (Directional Mass + Z-Score Elastic)
+### Post-Upgrade Reality Check & P1 Convergence (2026-03-09)
 
-- The upgraded Elastic logic became much more selective (signal count dropped materially).
-- Under strict convergence gates, promoted candidates changed from `3` to `0`.
-- Some short-side pockets emerged (`IWM/TSLA/META/QQQ`), but not with enough robust sample under current gates.
-- End-of-day call: keep the upgrade, but retune the new Elastic hyperparameters before promoting live candidates.
+- Over 2026-03-08 and 2026-03-09, we successfully ran P1 ablation and a full convergence pipeline using relative friction (cost-bps) and a strict 0.60 OOS win-rate gate.
+- **Directional Mass Filter:** Ablation proved this is highly protective for `Elastic Band Reversion`. Removing it floods the engine with noise and tanks E[R].
+- **Volume Filter on Kinematic Ladder:** Ablation proved the volume gate was actually blocking the edge. Removing it revealed a localized `+0.22 E[R]` edge on `TSLA short`.
+- **Top 10 Promoted Candidates (Untouched Holdout Ready):**
+  - All 10 are variants of **Elastic Band Reversion**.
+  - `META short` and `TSLA short` emerged as the most robust underlyings, both producing 100% win-rates across 6 out-of-sample walk-forward windows with `E[R] > +0.13`.
+  - `Compression Breakout` and `Regime Router` failed to produce any edge and are marked `dead` in the new `research_state.yaml` registry.
+
+See details: `docs/P1_CONVERGENCE_RESULTS_2026-03-09.md`.
 
 ## Practical Interpretation For Trading
 
-- We likely have **one promising directional entry engine** (`Elastic Band`) but not a broad universal engine yet.
-- `2:1` is useful and currently appears more robust than `1:1` for these strategies under friction assumptions.
-- The next bottleneck is not feature generation; it is parameter stability and OOS persistence.
+- We officially have **one highly promising directional entry engine** (`Elastic Band Reversion`) with proven ticker-specialized parameters.
+- `2:1` is useful and currently appears more robust than `1:1` for these strategies under relative friction assumptions (8 bps).
 
 ## Recommended Next Steps
 

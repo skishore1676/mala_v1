@@ -42,7 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-months", type=int, default=3)
     parser.add_argument("--ratios", default="1.0,1.25,1.5,2.0")
     parser.add_argument("--walkforward-min-signals", type=int, default=20)
-    parser.add_argument("--cost-grid", default="0.05,0.08,0.12")
+    # Friction mode: use --cost-bps for relative (ticker-aware) friction.
+    # --cost-grid is used only in legacy fixed-cost mode.
+    parser.add_argument("--cost-grid", default=None,
+                        help="Fixed cost_r grid (legacy), e.g. '0.05,0.08,0.12'. Overrides --cost-bps.")
+    parser.add_argument("--cost-bps", type=float, default=8.0,
+                        help="Relative friction in basis points of entry price. Default 8 bps.")
 
     # Promotion gates.
     parser.add_argument("--gate-min-oos-windows", type=int, default=6)
@@ -68,7 +73,8 @@ def cost_tag(cost_r: float) -> str:
     return f"cost{int(round(cost_r * 1000)):03d}"
 
 
-def run_walkforward(args: argparse.Namespace, cost_r: float) -> Path:
+def run_walkforward_fixed(args: argparse.Namespace, cost_r: float) -> Path:
+    """Run walk-forward with a fixed cost_r (legacy grid mode)."""
     tag = cost_tag(cost_r)
     cmd = [
         args.python_bin,
@@ -92,7 +98,43 @@ def run_walkforward(args: argparse.Namespace, cost_r: float) -> Path:
         "--tag",
         tag,
     ]
-    console.print(f"[cyan]Running walk-forward for cost_r={cost_r:.3f} ({tag})[/]")
+    console.print(f"[cyan]Running walk-forward (fixed) for cost_r={cost_r:.3f} ({tag})[/]")
+    subprocess.run(cmd, check=True)
+
+    out_dir = Path(args.out_dir)
+    stamp = date.today().isoformat()
+    summary_path = out_dir / f"walk_forward_novel_summary_{stamp}_{tag}.csv"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Expected summary not found: {summary_path}")
+    return summary_path
+
+
+def run_walkforward_relative(args: argparse.Namespace, cost_bps: float) -> Path:
+    """Run walk-forward with relative friction (bps of entry price)."""
+    tag = f"bps{int(round(cost_bps))}"
+    cmd = [
+        args.python_bin,
+        "scripts/run_walk_forward_novel.py",
+        "--tickers",
+        *args.tickers,
+        "--start",
+        args.start.isoformat(),
+        "--end",
+        args.end.isoformat(),
+        "--train-months",
+        str(args.train_months),
+        "--test-months",
+        str(args.test_months),
+        "--ratios",
+        args.ratios,
+        "--cost-bps",
+        str(cost_bps),
+        "--min-signals",
+        str(args.walkforward_min_signals),
+        "--tag",
+        tag,
+    ]
+    console.print(f"[cyan]Running walk-forward (relative) for cost_bps={cost_bps} ({tag})[/]")
     subprocess.run(cmd, check=True)
 
     out_dir = Path(args.out_dir)
@@ -229,19 +271,32 @@ def write_shortlist_md(
 
 def main() -> None:
     args = parse_args()
-    costs = parse_costs(args.cost_grid)
+
+    # Determine friction mode
+    use_fixed_grid = args.cost_grid is not None
+    if use_fixed_grid:
+        costs = parse_costs(args.cost_grid)
+        friction_desc = f"fixed cost_r grid={costs}"
+    else:
+        costs = [args.cost_bps]  # single bps value (relative mode)
+        friction_desc = f"relative {args.cost_bps} bps"
 
     console.rule("[bold green]Strategy Convergence Pipeline[/]")
     console.print(
         f"Tickers={args.tickers} | Range={args.start}->{args.end} | "
-        f"Cost grid={costs} | Gates: windows>={args.gate_min_oos_windows}, "
+        f"Friction: {friction_desc} | Gates: windows>={args.gate_min_oos_windows}, "
         f"signals>={args.gate_min_oos_signals}, pct>={args.gate_min_pct_positive}, exp>={args.gate_min_exp_r}"
     )
 
     summary_frames: list[pl.DataFrame] = []
-    for cost_r in costs:
-        summary_path = run_walkforward(args, cost_r)
-        df = pl.read_csv(summary_path).with_columns(pl.lit(cost_r).alias("cost_r"))
+    if use_fixed_grid:
+        for cost_r in costs:
+            summary_path = run_walkforward_fixed(args, cost_r)
+            df = pl.read_csv(summary_path).with_columns(pl.lit(cost_r).alias("cost_r"))
+            summary_frames.append(df)
+    else:
+        summary_path = run_walkforward_relative(args, args.cost_bps)
+        df = pl.read_csv(summary_path).with_columns(pl.lit(args.cost_bps).alias("cost_r"))
         summary_frames.append(df)
 
     combined = pl.concat(summary_frames)

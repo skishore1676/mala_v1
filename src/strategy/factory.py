@@ -12,6 +12,38 @@ from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 
 
 def build_strategy_by_name(strategy_name: str) -> BaseStrategy:
+    import re
+
+    # Parse parametric Elastic Band: "Elastic Band z=1.0/w=240+dm"
+    if strategy_name.startswith("Elastic Band z="):
+        match = re.search(r"z=([\d\.]+)/w=(\d+)(\+dm)?", strategy_name)
+        if match:
+            z_thresh = float(match.group(1))
+            z_win = int(match.group(2))
+            use_dm = bool(match.group(3))
+            return ElasticBandReversionStrategy(
+                z_score_threshold=z_thresh,
+                z_score_window=z_win,
+                use_directional_mass=use_dm,
+            )
+
+    # Parse parametric Kinematic Ladder: "Kinematic Ladder rw=20/aw=8-vol"
+    if strategy_name.startswith("Kinematic Ladder rw="):
+        match = re.search(r"rw=(\d+)/aw=(\d+)([+-]vol)?", strategy_name)
+        if match:
+            r_win = int(match.group(1))
+            a_win = int(match.group(2))
+            vol_flag = match.group(3)
+            use_vol = vol_flag == "+vol" if vol_flag else True
+            return KinematicLadderStrategy(
+                regime_window=r_win,
+                accel_window=a_win,
+                use_volume_filter=use_vol,
+                volume_multiplier=1.05,
+                volume_ma_period=settings.volume_ma_period,
+                use_time_filter=True,
+            )
+
     if strategy_name == "Elastic Band Reversion":
         return ElasticBandReversionStrategy(
             z_score_threshold=2.0,

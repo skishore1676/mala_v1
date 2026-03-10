@@ -58,12 +58,21 @@ def parse_floats(csv_like: str) -> list[float]:
 
 def latest_gate_report(out_dir: Path) -> Path:
     candidates = sorted(out_dir.glob("convergence_gate_report_*.csv"))
-    if not candidates:
-        raise FileNotFoundError("No convergence_gate_report_*.csv found in data/results")
-    return candidates[-1]
+    # filter out "relaxed" reports
+    strict = [c for c in candidates if "relaxed" not in c.name]
+    if not strict:
+        raise FileNotFoundError("No strict convergence_gate_report_*.csv found in data/results")
+    return strict[-1]
 
 
-def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_r: float) -> dict:
+def cost_r_from_bps(cost_bps: float, avg_mae_dollars: float, avg_entry_price: float) -> float:
+    """Convert basis-point transaction cost to R units: cost_dollars / avg_mae."""
+    if avg_mae_dollars is None or avg_mae_dollars <= 0 or avg_entry_price <= 0:
+        return 0.05
+    return (avg_entry_price * cost_bps / 10_000.0) / avg_mae_dollars
+
+
+def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_bps: float) -> dict:
     base = df_eval.filter(pl.col("signal")).drop_nulls(subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"])
     if direction != "combined":
         base = base.filter(pl.col("signal_direction") == direction)
@@ -75,6 +84,11 @@ def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_r: 
     mae = base["forward_mae_eod"].to_numpy()
     wins = mfe >= (ratio * mae)
     p = float(np.mean(wins))
+    
+    avg_price = base["close"].mean()
+    avg_mae_dollars = float(np.mean(mae))
+    cost_r = cost_r_from_bps(cost_bps, avg_mae_dollars, avg_price)
+    
     exp_r = p * ratio - (1.0 - p) - cost_r
     return {"signals": int(len(mfe)), "confidence": round(p, 4), "exp_r": round(exp_r, 4)}
 
@@ -83,14 +97,14 @@ def choose_ratio(
     calib_df: pl.DataFrame,
     direction: str,
     ratios: list[float],
-    cost_r: float,
+    cost_bps: float,
     min_calib_signals: int,
 ) -> tuple[float | None, dict]:
     best_ratio = None
     best_exp = -1e9
     best_stats: dict = {"signals": 0, "confidence": None, "exp_r": None}
     for ratio in ratios:
-        stats = eval_direction(calib_df, direction, ratio, cost_r)
+        stats = eval_direction(calib_df, direction, ratio, cost_bps)
         if stats["exp_r"] is None or int(stats["signals"]) < min_calib_signals:
             continue
         exp_r = float(stats["exp_r"])
@@ -118,7 +132,7 @@ def print_summary_table(df: pl.DataFrame) -> None:
             str(row["direction"]),
             str(row["decision"]),
             str(int(row["observed_cost_points"])),
-            f"{float(row['min_holdout_exp_r']):+.3f}",
+            f"{float(row['min_holdout_exp_r']):+.3f}" if row["min_holdout_exp_r"] is not None else "NaN",
             str(int(row["min_holdout_signals"])),
         )
     console.print(table)
@@ -182,12 +196,12 @@ def main() -> None:
             & (et_date_expr("timestamp") <= args.holdout_end)
         )
 
-        for cost_r in costs:
+        for cost_bps in costs:
             selected_ratio, calib_stats = choose_ratio(
                 calib_df=calib_df,
                 direction=direction,
                 ratios=ratios,
-                cost_r=cost_r,
+                cost_bps=cost_bps,
                 min_calib_signals=args.min_calibration_signals,
             )
             if selected_ratio is None:
@@ -195,7 +209,7 @@ def main() -> None:
                     "ticker": ticker,
                     "strategy": strategy_name,
                     "direction": direction,
-                    "cost_r": cost_r,
+                    "cost_bps": cost_bps,
                     "selected_ratio": None,
                     "calib_signals": 0,
                     "calib_exp_r": None,
@@ -206,7 +220,7 @@ def main() -> None:
                 })
                 continue
 
-            holdout_stats = eval_direction(holdout_df, direction, selected_ratio, cost_r)
+            holdout_stats = eval_direction(holdout_df, direction, selected_ratio, cost_bps)
             holdout_signals = int(holdout_stats["signals"])
             holdout_exp = holdout_stats["exp_r"]
             passes_cost = (
@@ -218,7 +232,7 @@ def main() -> None:
                 "ticker": ticker,
                 "strategy": strategy_name,
                 "direction": direction,
-                "cost_r": cost_r,
+                "cost_bps": cost_bps,
                 "selected_ratio": selected_ratio,
                 "calib_signals": int(calib_stats["signals"]),
                 "calib_exp_r": calib_stats["exp_r"],

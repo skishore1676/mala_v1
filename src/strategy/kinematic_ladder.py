@@ -28,6 +28,7 @@ class KinematicLadderStrategy(BaseStrategy):
         volume_ma_period: int = settings.volume_ma_period,
         volume_multiplier: float = 1.1,
         use_time_filter: bool = True,
+        use_volume_filter: bool = True,
         session_start: time = time(9, 35),
         session_end: time = time(15, 30),
     ) -> None:
@@ -36,12 +37,14 @@ class KinematicLadderStrategy(BaseStrategy):
         self.volume_ma_period = volume_ma_period
         self.volume_multiplier = volume_multiplier
         self.use_time_filter = use_time_filter
+        self.use_volume_filter = use_volume_filter
         self.session_start = session_start
         self.session_end = session_end
 
     @property
     def name(self) -> str:
-        return "Kinematic Ladder"
+        vol = "+vol" if self.use_volume_filter else "-vol"
+        return f"Kinematic Ladder rw={self.regime_window}/aw={self.accel_window}{vol}"
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = {
@@ -98,7 +101,11 @@ class KinematicLadderStrategy(BaseStrategy):
         trigger_long = (pl.col("velocity_1m") > 0) & (pl.col("jerk_1m") > 0)
         trigger_short = (pl.col("velocity_1m") < 0) & (pl.col("jerk_1m") < 0)
 
-        volume_gate = pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
+        volume_gate = (
+            pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
+            if self.use_volume_filter
+            else pl.lit(True)
+        )
 
         if self.use_time_filter:
             time_gate = (
@@ -126,11 +133,13 @@ class KinematicLadderStrategy(BaseStrategy):
         shorts = df.filter(pl.col("signal_direction") == "short").height
 
         logger.info(
-            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars",
+            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
+            "[vol_filter={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
+            self.use_volume_filter,
         )
         return df

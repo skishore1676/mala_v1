@@ -21,13 +21,16 @@ class ElasticBandReversionStrategy(BaseStrategy):
         self,
         z_score_threshold: float = 2.0,
         z_score_window: int = 240,
+        use_directional_mass: bool = True,
     ) -> None:
         self.z_score_threshold = z_score_threshold
         self.z_score_window = z_score_window
+        self.use_directional_mass = use_directional_mass
 
     @property
     def name(self) -> str:
-        return "Elastic Band Reversion"
+        dm = "+dm" if self.use_directional_mass else "-dm"
+        return f"Elastic Band z={self.z_score_threshold}/w={self.z_score_window}{dm}"
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = {
@@ -35,8 +38,9 @@ class ElasticBandReversionStrategy(BaseStrategy):
             "vpoc_4h",
             "velocity_1m",
             "jerk_1m",
-            "directional_mass",
         }
+        if self.use_directional_mass:
+            required.add("directional_mass")
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
@@ -61,14 +65,14 @@ class ElasticBandReversionStrategy(BaseStrategy):
             (pl.col("_z_score") <= -self.z_score_threshold)
             & (pl.col("velocity_1m") < 0)
             & (pl.col("jerk_1m") > 0)
-            & (pl.col("directional_mass") > 0)
+            & (pl.col("directional_mass") > 0 if self.use_directional_mass else pl.lit(True))
         )
 
         short_signal = (
             (pl.col("_z_score") >= self.z_score_threshold)
             & (pl.col("velocity_1m") > 0)
             & (pl.col("jerk_1m") < 0)
-            & (pl.col("directional_mass") < 0)
+            & (pl.col("directional_mass") < 0 if self.use_directional_mass else pl.lit(True))
         )
 
         df = df.with_columns([
@@ -86,11 +90,13 @@ class ElasticBandReversionStrategy(BaseStrategy):
         shorts = df.filter(pl.col("signal_direction") == "short").height
 
         logger.info(
-            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars",
+            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
+            "[dm={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
+            self.use_directional_mass,
         )
         return df

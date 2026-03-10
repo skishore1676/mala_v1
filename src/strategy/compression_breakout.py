@@ -29,6 +29,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
         volume_ma_period: int = settings.volume_ma_period,
         volume_multiplier: float = 1.2,
         use_time_filter: bool = True,
+        use_volume_filter: bool = True,
         session_start: time = time(9, 40),
         session_end: time = time(15, 30),
     ) -> None:
@@ -38,6 +39,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
         self.volume_ma_period = volume_ma_period
         self.volume_multiplier = volume_multiplier
         self.use_time_filter = use_time_filter
+        self.use_volume_filter = use_volume_filter
         self.session_start = session_start
         self.session_end = session_end
 
@@ -86,7 +88,11 @@ class CompressionBreakoutStrategy(BaseStrategy):
             & pl.col("_long_vol").is_not_null()
         )
 
-        volume_gate = pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
+        volume_gate = (
+            pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
+            if self.use_volume_filter
+            else pl.lit(True)
+        )
 
         bullish_bias = pl.col("ema_8") > pl.col("ema_12")
         bearish_bias = pl.col("ema_8") < pl.col("ema_12")
@@ -123,11 +129,13 @@ class CompressionBreakoutStrategy(BaseStrategy):
         shorts = df.filter(pl.col("signal_direction") == "short").height
 
         logger.info(
-            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars",
+            "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
+            "[vol_filter={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
+            self.use_volume_filter,
         )
         return df

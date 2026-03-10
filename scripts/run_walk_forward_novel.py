@@ -35,8 +35,6 @@ from src.oracle.metrics import MetricsCalculator
 from src.oracle.results_db import ResultsDB
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
-from src.strategy.compression_breakout import CompressionBreakoutStrategy
-from src.strategy.regime_router import RegimeRouterStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 from src.time_utils import et_date_expr
 
@@ -60,7 +58,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-months", type=int, default=6)
     parser.add_argument("--test-months", type=int, default=3)
     parser.add_argument("--ratios", default="1.0,1.25,1.5,2.0")
-    parser.add_argument("--cost-r", type=float, default=0.05)
+    parser.add_argument("--cost-r", type=float, default=None,
+                        help="Fixed cost in R units (legacy). Superseded by --cost-bps.")
+    parser.add_argument("--cost-bps", type=float, default=8.0,
+                        help="Transaction cost in basis points of entry price (relative, ticker-aware). Default 8 bps.")
     parser.add_argument("--min-signals", type=int, default=20)
     parser.add_argument(
         "--tag",
@@ -92,22 +93,50 @@ def eval_ratio(mfe: np.ndarray, mae: np.ndarray, ratio: float, cost_r: float) ->
     return p, exp_r
 
 
-def evaluate_df(df_eval: pl.DataFrame, direction: str, ratio: float, cost_r: float) -> dict:
-    base = df_eval.filter(pl.col("signal")).drop_nulls(subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"])
+def cost_r_from_bps(cost_bps: float, avg_mae_dollars: float, avg_entry_price: float) -> float:
+    """Convert basis-point transaction cost to R units: cost_dollars / avg_mae."""
+    if avg_mae_dollars is None or avg_mae_dollars <= 0 or avg_entry_price <= 0:
+        return 0.05  # conservative fallback
+    return (avg_entry_price * cost_bps / 10_000.0) / avg_mae_dollars
+
+
+def evaluate_df(
+    df_eval: pl.DataFrame,
+    direction: str,
+    ratio: float,
+    cost_r: float | None = None,
+    cost_bps: float | None = None,
+) -> dict:
+    """
+    Evaluate a window/direction subset.
+    If cost_bps is provided, cost_r is computed relative to the avg MAE of the subset.
+    """
+    base = df_eval.filter(pl.col("signal")).drop_nulls(
+        subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"]
+    )
     if direction != "combined":
         base = base.filter(pl.col("signal_direction") == direction)
 
     if base.is_empty():
-        return {"signals": 0, "confidence": None, "exp_r": None}
+        return {"signals": 0, "confidence": None, "exp_r": None, "effective_cost_r": None}
 
     mfe = base["forward_mfe_eod"].to_numpy()
     mae = base["forward_mae_eod"].to_numpy()
 
-    p, exp_r = eval_ratio(mfe, mae, ratio, cost_r)
+    # Determine effective cost
+    if cost_bps is not None:
+        avg_mae_d = float(np.mean(mae))
+        avg_entry = float(base["close"].mean()) if "close" in base.columns else 0.0
+        effective_cost_r = cost_r_from_bps(cost_bps, avg_mae_d, avg_entry)
+    else:
+        effective_cost_r = cost_r or 0.05
+
+    p, exp_r = eval_ratio(mfe, mae, ratio, effective_cost_r)
     return {
         "signals": len(mfe),
         "confidence": round(p, 4),
         "exp_r": round(exp_r, 4),
+        "effective_cost_r": round(effective_cost_r, 5),
     }
 
 
@@ -115,6 +144,11 @@ def main() -> None:
     args = parse_args()
     ratios = [float(x.strip()) for x in args.ratios.split(",") if x.strip()]
     windows = build_windows(args.start, args.end, args.train_months, args.test_months)
+
+    # Determine friction mode: relative bps wins if --cost-r not explicitly passed
+    use_relative = args.cost_r is None
+    cost_bps_val = args.cost_bps if use_relative else None
+    fixed_cost_r = args.cost_r if not use_relative else None
 
     if not windows:
         console.print("[red]No valid walk-forward windows for chosen date range/params.[/]")
@@ -124,34 +158,29 @@ def main() -> None:
     physics = PhysicsEngine()
     metrics = MetricsCalculator()
 
+    # ── Active strategies (based on research_state.yaml) ─────────────────────
+    # Elastic Band: 6 param variants covering per-ticker optimal configs from P0 grid search.
+    # Each variant has a unique name (z + window) so they track independently.
     strategies = [
-        ElasticBandReversionStrategy(
-            z_score_threshold=2.0,
-            z_score_window=240,
-        ),
-        KinematicLadderStrategy(
-            regime_window=30,
-            accel_window=10,
-            volume_multiplier=1.05,
-            volume_ma_period=settings.volume_ma_period,
-            use_time_filter=True,
-        ),
-        CompressionBreakoutStrategy(
-            compression_window=20,
-            breakout_lookback=20,
-            compression_factor=0.85,
-            volume_ma_period=settings.volume_ma_period,
-            volume_multiplier=1.15,
-            use_time_filter=True,
-        ),
-        RegimeRouterStrategy(
-            vol_short_window=20,
-            vol_long_window=60,
-            trend_vel_window=30,
-            trend_vol_ratio=1.0,
-            compression_vol_ratio=0.9,
-            trend_velocity_floor=0.015,
-        ),
+        # META short sweet spot: low z-threshold / long baseline (100% OOS windows confirmed)
+        ElasticBandReversionStrategy(z_score_threshold=1.25, z_score_window=360),
+        ElasticBandReversionStrategy(z_score_threshold=1.0,  z_score_window=240),
+        # TSLA / IWM general sweet spot
+        ElasticBandReversionStrategy(z_score_threshold=1.75, z_score_window=120),
+        ElasticBandReversionStrategy(z_score_threshold=2.0,  z_score_window=240),
+        # AAPL / QQQ sweet spot
+        ElasticBandReversionStrategy(z_score_threshold=2.5,  z_score_window=240),
+        ElasticBandReversionStrategy(z_score_threshold=2.5,  z_score_window=360),
+        # AAPL high-threshold variant
+        ElasticBandReversionStrategy(z_score_threshold=3.0,  z_score_window=240),
+
+        # ── Kinematic Ladder (CANDIDATE — TSLA short, no volume filter) ───────
+        # P1 ablation confirmed: vol gate kills KL; TSLA short without vol shows E[R]=+0.22
+        KinematicLadderStrategy(regime_window=20, accel_window=8,  use_volume_filter=False),
+        KinematicLadderStrategy(regime_window=30, accel_window=8,  use_volume_filter=False),
+        KinematicLadderStrategy(regime_window=20, accel_window=12, use_volume_filter=False),
+
+        # ── Opening Drive Classifier (CANDIDATE) ──────────────────────────────
         OpeningDriveClassifierStrategy(
             opening_window_minutes=25,
             entry_start_offset_minutes=25,
@@ -174,12 +203,17 @@ def main() -> None:
         ),
     ]
 
+
     rows: list[dict] = []
 
     console.rule("[bold cyan]Walk-Forward Evaluation[/]")
+    friction_desc = (
+        f"relative {cost_bps_val} bps" if use_relative else f"fixed cost_r={fixed_cost_r}"
+    )
     console.print(
         f"Tickers: {args.tickers} | Range: {args.start} -> {args.end} | "
-        f"Train/Test months: {args.train_months}/{args.test_months} | Ratios: {ratios} | cost_r={args.cost_r}"
+        f"Train/Test months: {args.train_months}/{args.test_months} | Ratios: {ratios} | "
+        f"Friction: {friction_desc}"
     )
 
     for ticker in args.tickers:
@@ -210,7 +244,10 @@ def main() -> None:
                     best_train_n = 0
 
                     for ratio in ratios:
-                        train_stats = evaluate_df(train_df, direction, ratio, args.cost_r)
+                        train_stats = evaluate_df(
+                            train_df, direction, ratio,
+                            cost_r=fixed_cost_r, cost_bps=cost_bps_val,
+                        )
                         n = int(train_stats["signals"])
                         if n < args.min_signals or train_stats["exp_r"] is None:
                             continue
@@ -224,7 +261,10 @@ def main() -> None:
                     if best_ratio is None:
                         continue
 
-                    test_stats = evaluate_df(test_df, direction, best_ratio, args.cost_r)
+                    test_stats = evaluate_df(
+                        test_df, direction, best_ratio,
+                        cost_r=fixed_cost_r, cost_bps=cost_bps_val,
+                    )
                     test_n = int(test_stats["signals"])
                     if test_n < args.min_signals or test_stats["exp_r"] is None:
                         continue
@@ -245,6 +285,7 @@ def main() -> None:
                         "test_signals": test_n,
                         "test_confidence": test_stats["confidence"],
                         "test_exp_r": test_stats["exp_r"],
+                        "effective_cost_r": test_stats.get("effective_cost_r"),
                     })
 
     if not rows:
@@ -258,9 +299,10 @@ def main() -> None:
         .agg([
             pl.len().alias("oos_windows"),
             pl.col("test_signals").sum().alias("oos_signals"),
-            pl.col("test_exp_r").mean().alias("avg_test_exp_r"),
-            (pl.col("test_exp_r") > 0).mean().alias("pct_positive_oos_windows"),
-            pl.col("test_confidence").mean().alias("avg_test_confidence"),
+            # drop NaN before aggregating so a single bad window doesn't poison the group
+            pl.col("test_exp_r").drop_nans().mean().alias("avg_test_exp_r"),
+            (pl.col("test_exp_r").drop_nans() > 0).mean().alias("pct_positive_oos_windows"),
+            pl.col("test_confidence").drop_nans().mean().alias("avg_test_confidence"),
         ])
         .sort(["pct_positive_oos_windows", "avg_test_exp_r"], descending=[True, True])
     )
@@ -281,8 +323,8 @@ def main() -> None:
             str(r["direction"]),
             str(r["oos_windows"]),
             str(r["oos_signals"]),
-            f"{float(r['avg_test_exp_r']):+.3f}",
-            f"{float(r['pct_positive_oos_windows']):.1%}",
+            f"{float(r['avg_test_exp_r']):+.3f}" if r["avg_test_exp_r"] is not None else "NaN",
+            f"{float(r['pct_positive_oos_windows']):.1%}" if r["pct_positive_oos_windows"] is not None else "NaN",
         )
 
     console.print(table)
@@ -310,7 +352,8 @@ def main() -> None:
             "train_months": args.train_months,
             "test_months": args.test_months,
             "ratios": ratios,
-            "cost_r": args.cost_r,
+            "cost_r": fixed_cost_r,
+            "cost_bps": cost_bps_val,
             "min_signals": args.min_signals,
             "tag": args.tag,
         },
