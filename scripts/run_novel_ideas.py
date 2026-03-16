@@ -33,6 +33,7 @@ from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 from src.strategy.regime_router import RegimeRouterStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
+from src.strategy.jerk_pivot_momentum import JerkPivotMomentumStrategy
 
 console = Console()
 
@@ -159,6 +160,23 @@ def main() -> None:
     rng = np.random.default_rng(7)
 
     strategies = [
+        JerkPivotMomentumStrategy(
+            vpoc_proximity_pct=0.005,
+            jerk_lookback=20,
+            volume_multiplier=1.0,
+            volume_ma_period=settings.volume_ma_period,
+            use_volume_filter=True,
+            use_time_filter=True,
+        ),
+        JerkPivotMomentumStrategy(
+            vpoc_proximity_pct=0.003,
+            jerk_lookback=10,
+            volume_multiplier=1.1,
+            volume_ma_period=settings.volume_ma_period,
+            use_volume_filter=True,
+            use_time_filter=True,
+            strategy_label="Jerk-Pivot Momentum (tight prox/fast jerk)",
+        ),
         ElasticBandReversionStrategy(
             z_score_threshold=2.0,
             z_score_window=240,

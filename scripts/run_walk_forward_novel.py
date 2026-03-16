@@ -36,6 +36,7 @@ from src.oracle.results_db import ResultsDB
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
+from src.strategy.jerk_pivot_momentum import JerkPivotMomentumStrategy
 from src.time_utils import et_date_expr
 
 
@@ -200,6 +201,16 @@ def main() -> None:
             enable_continue=True,
             enable_fail=False,
             strategy_label="Opening Drive v2 (Short Continue)",
+        ),
+
+        # ── Jerk-Pivot Momentum (tight variant: 0.3% VPOC, 10-bar jerk) ───────
+        # Per prior backtest: IWM shows E(R)=+0.054 at 2:1 R:R with 100% P(E>0)
+        JerkPivotMomentumStrategy(
+            vpoc_proximity_pct=0.003,  # 0.3% tight VPOC proximity
+            jerk_lookback=10,          # 10-bar fast jerk
+            volume_multiplier=1.1,
+            use_volume_filter=True,
+            strategy_label="Jerk-Pivot Momentum (tight)",
         ),
     ]
 
