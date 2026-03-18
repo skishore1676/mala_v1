@@ -9,6 +9,7 @@ import pytest
 from src.newton.engine import PhysicsEngine
 from src.newton.resampler import TimeframeResampler
 from src.newton.transforms import JerkTransform, MarketImpulseTransform
+from src.strategy.market_impulse import MarketImpulseStrategy
 
 
 @pytest.fixture
@@ -183,3 +184,42 @@ def test_market_impulse_transform_supports_custom_timeframe() -> None:
     assert "impulse_regime_15m" in result.columns
     assert "impulse_stage_15m" in result.columns
     assert "vma_10_15m" in result.columns
+
+
+def test_enrich_for_features_accepts_market_impulse_transform_name() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, {"market_impulse"})
+
+    assert "impulse_regime_5m" in result.columns
+    assert "vma_10_5m" in result.columns
+
+
+def test_market_impulse_strategy_declares_pipeline_resolvable_features() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    strategy = MarketImpulseStrategy()
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, strategy.required_features)
+
+    assert strategy.required_features.issubset(result.columns)
+    assert "vma_10_5m" in result.columns

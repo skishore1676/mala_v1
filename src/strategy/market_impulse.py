@@ -57,6 +57,17 @@ class MarketImpulseStrategy(BaseStrategy):
     def name(self) -> str:
         return "Market Impulse (Cross & Reclaim)"
 
+    @property
+    def required_features(self) -> set[str]:
+        return {
+            "timestamp",
+            "close",
+            "high",
+            "low",
+            self.vma_col,
+            self.regime_col,
+        }
+
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Apply the Market Impulse entry logic.
@@ -67,7 +78,7 @@ class MarketImpulseStrategy(BaseStrategy):
           - vma_10  (1-min VMA from Market Impulse indicator)
           - impulse_regime_5m (5-min regime: "bullish" / "bearish" / "neutral")
         """
-        required = {"timestamp", "close", "high", "low", self.vma_col, self.regime_col}
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(

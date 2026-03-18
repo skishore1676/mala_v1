@@ -1,57 +1,33 @@
 # Script Support Matrix
 
-This repo is intentionally moving away from "every script is equally official."
+This repo is now intentionally API-first.
 
-Use the categories below when deciding where to add work.
+## Top-Level Scripts
 
-## Canonical Research Runners
-
-These are the supported entrypoints for the deterministic M1-M5 flow and results inspection.
+Only these files should be treated as active entrypoints under `scripts/`:
 
 | script | status | reason |
 |---|---|---|
-| `run_research_orchestrator.py` | keep | Canonical inspection entrypoint for tracked strategies, validation fixtures, and next allowed actions. |
-| `run_walk_forward_novel.py` | keep | Canonical M3-style reusable walk-forward runner. |
-| `run_targeted_retune.py` | keep | Canonical bounded retune runner for focused parameter refinement on tracked strategy families. |
-| `run_convergence_pipeline.py` | keep | Canonical convergence gate runner until orchestration is fully library-driven. |
-| `run_holdout_validation.py` | keep | Canonical holdout validation runner. |
-| `run_execution_mapping.py` | keep | Canonical execution mapping runner. |
-| `query_results_db.py` | keep | Canonical artifact/result inspection utility. |
+| `run_research_orchestrator.py` | keep | Only supported top-level orchestration CLI for inspection and stage-safe planning. |
+| `query_results_db.py` | keep | Utility for querying stored research results. |
 
-## Supported Specialized Runners
+## Quarantined Legacy Runners
 
-These are still supported because they cover behavior not yet fully absorbed into the research workflow.
-
-| script | status | reason |
-|---|---|---|
-| `run_market_impulse.py` | keep_specialized | Owns trade-simulator workflow and Market Impulse execution path that is not yet part of the M1-M5 research stack. |
-
-## Migrate Next
-
-These still provide useful behavior, but new work should move into `src/research/` tools/stages instead of extending these scripts directly.
-
-| script | status | migration target |
-|---|---|---|
-| `run_elastic_grid.py` | migrate | Replace with `parameter_sweep` / M1 discovery tooling over reusable stages. |
-| `run_opening_drive_classifier.py` | migrate | Move strategy-specific robustness reporting onto the shared research tool surface. |
-
-## Archived Legacy Scripts
-
-These are historical experiments or one-off harnesses that have been moved under `scripts/legacy/`. Avoid adding new logic here unless preserving provenance is the specific goal.
+All runner-style CLIs now live under `scripts/legacy/`. They are preserved for provenance, replay, or comparison only. New productized research execution should go through `ResearchOrchestrator` and `src/research/tools.py`.
 
 | script | status | note |
 |---|---|---|
-| `legacy/run_measurement_sensitivity.py` | archived | Superseded by policy-driven ratio evaluation and modern research runners. |
-| `legacy/run_sweep.py` | archived | Old opening-bell experiment harness; not part of the current research workflow. |
-| `legacy/run_stage_flip.py` | archived | Exploratory Market Impulse stage-flip simulator, not a canonical strategy pipeline. |
-| `legacy/run_jerk_pivot_backtest.py` | archived | Strategy-specific exploratory backtest with synthetic-data mode; preserve only if needed for provenance. |
-| `legacy/run_novel_ideas.py` | archived | Batch comparison harness whose reusable logic now belongs in research tools rather than a top-level runner. |
-| `legacy/run_p1_evaluation.py` | archived | Historical bundled experiment pack; preserve for provenance, not as a primary interface. |
-
-## Deletion Rule
-
-Delete or move a script out of the top-level `scripts/` surface only when all three are true:
-
-1. Its unique logic exists in `src/research/` or another reusable module.
-2. The refactor validation set still passes through the supported path.
-3. Results inspection remains possible through the supported artifacts or `results.db`.
+| `legacy/run_elastic_grid.py` | quarantined | Historical M1 discovery wrapper; superseded by `parameter_sweep`. |
+| `legacy/run_walk_forward_novel.py` | quarantined | Historical walk-forward CLI; reusable logic lives in `src/research/stages/walk_forward.py`. |
+| `legacy/run_targeted_retune.py` | quarantined | Historical bounded-retune CLI; move future work into research tools. |
+| `legacy/run_convergence_pipeline.py` | quarantined | Historical convergence wrapper; do not treat as canonical orchestration. |
+| `legacy/run_holdout_validation.py` | quarantined | Historical holdout wrapper over reusable stage logic. |
+| `legacy/run_execution_mapping.py` | quarantined | Historical execution-mapping wrapper over reusable stage logic. |
+| `legacy/run_market_impulse.py` | quarantined | Specialized trade-simulator runner preserved for comparison until fully absorbed into the API surface. |
+| `legacy/run_opening_drive_classifier.py` | quarantined | Strategy-specific reporting harness preserved for reference. |
+| `legacy/run_measurement_sensitivity.py` | quarantined | Superseded by policy-driven ratio evaluation and modern research tooling. |
+| `legacy/run_sweep.py` | quarantined | Old opening-bell experiment harness. |
+| `legacy/run_stage_flip.py` | quarantined | Exploratory Market Impulse stage-flip simulator. |
+| `legacy/run_jerk_pivot_backtest.py` | quarantined | Strategy-specific exploratory backtest with synthetic-data mode. |
+| `legacy/run_novel_ideas.py` | quarantined | Batch comparison harness kept for provenance. |
+| `legacy/run_p1_evaluation.py` | quarantined | Historical bundled experiment pack kept for provenance. |

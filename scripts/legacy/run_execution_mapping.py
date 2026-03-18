@@ -17,7 +17,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine

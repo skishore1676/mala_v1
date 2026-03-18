@@ -8,8 +8,8 @@ What it does:
 3. Applies promotion gates and produces a ranked shortlist.
 
 Usage:
-  ./.venv/bin/python scripts/run_convergence_pipeline.py
-  ./.venv/bin/python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
+  ./.venv/bin/python scripts/legacy/run_convergence_pipeline.py
+  ./.venv/bin/python scripts/legacy/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.oracle.results_db import ResultsDB
 from src.research.stages import build_gate_report, cost_tag, parse_costs
 
@@ -78,7 +78,7 @@ def run_walkforward_fixed(args: argparse.Namespace, cost_r: float) -> Path:
     tag = cost_tag(cost_r)
     cmd = [
         args.python_bin,
-        "scripts/run_walk_forward_novel.py",
+        "scripts/legacy/run_walk_forward_novel.py",
         "--tickers",
         *args.tickers,
         "--start",
@@ -118,7 +118,7 @@ def run_walkforward_relative(args: argparse.Namespace, cost_bps: float) -> Path:
     tag = f"bps{int(round(cost_bps))}"
     cmd = [
         args.python_bin,
-        "scripts/run_walk_forward_novel.py",
+        "scripts/legacy/run_walk_forward_novel.py",
         "--tickers",
         *args.tickers,
         "--start",

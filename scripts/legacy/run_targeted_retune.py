@@ -20,7 +20,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.research import ResearchOrchestrator
 from src.strategy.kinematic_ladder import KinematicLadderStrategy

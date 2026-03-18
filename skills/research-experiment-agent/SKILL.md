@@ -40,7 +40,8 @@ Every cycle should end with one of four outcomes:
 - Select eligible experiments for the current stage from the deterministic workflow.
 - Run bounded parameter sweeps, ablations, retunes, walk-forward tests, and holdout checks using the available pipeline.
 - Use the repo's callable research tools and strategy metadata instead of reconstructing shell workflows from scratch.
-- Prefer canonical runners and avoid scripts under `scripts/legacy/` unless preserving or comparing historical research output is the point.
+- Treat `scripts/run_research_orchestrator.py` as the only top-level orchestration CLI.
+- Avoid scripts under `scripts/legacy/` unless preserving or comparing historical research output is the point.
 - Query prior results and compare the new idea against known baselines.
 - Recommend the next stage or a rework decision based on evidence.
 - Record reasoning, assumptions, and lineage so future sessions can continue the work.
@@ -61,13 +62,14 @@ Every cycle should end with one of four outcomes:
 - Allowed parameter space and evaluation budget.
 - Existing evidence from `research_state.yaml`, `results.db`, and prior artifacts.
 - The callable experiment surface in `src/research/tools.py` and strategy-declared `required_features`.
-- The script support policy in `scripts/STATUS.md` so you can distinguish canonical runners from migrate/archive candidates.
+- The script support policy in `scripts/STATUS.md` so you can distinguish the active API-first path from quarantined legacy runners.
 
 Quick examples:
 
 - `RewardRiskWinCondition(ratio=1.5)` for a 1.5:1 win definition.
 - `orchestrator.run_action(ResearchStage.M1_DISCOVERY, "parameter_sweep", ...)` to execute a stage-safe tool.
 - `PhysicsEngine().enrich_for_features(df, strategy.required_features)` when you need only the declared Newton features.
+- `PhysicsEngine().enrich_for_features(df, {"market_impulse"})` if you need to request the Market Impulse transform explicitly by name.
 
 ## Outputs The Agent Must Produce
 
@@ -96,7 +98,7 @@ Quick examples:
    Prefer the cheapest experiment that can materially change the decision.
 
 5. Run only stage-appropriate work.
-   Use deterministic stage runners, callable research tools, and bounded parameter space. Do not skip ahead.
+   Use the orchestrator, callable research tools, and bounded parameter space. Do not skip ahead.
 
 6. Ask Newton only for what the strategy needs.
    Prefer feature-targeted enrichment through `PhysicsEngine.enrich_for_features(...)` or equivalent runner paths instead of computing every transform by default.
@@ -123,4 +125,4 @@ At each stage, optimize for honesty and learning velocity, not for keeping the s
 - Prefer narrow retunes over broad rewrites.
 - Kill weak ideas early if the evidence is consistently poor.
 - Escalate to implementation work only when the blocker is structural, not just parametric.
-- Prefer the reusable tool surface in `src/research/tools.py` and the orchestration preview in `scripts/run_research_orchestrator.py` before inventing ad hoc execution paths.
+- Prefer the reusable tool surface in `src/research/tools.py` and the orchestration preview in `scripts/run_research_orchestrator.py` before touching any legacy runner.

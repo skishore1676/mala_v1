@@ -48,13 +48,14 @@ The current architectural pressure point is not `Chronos`; it is orchestration a
 - `Oracle` is moving toward a cleaner split between evaluation policy, simulation logic, and persistence/reporting.
 - `Strategy` is moving toward richer metadata for orchestration, including required features, parameter space, and evaluation mode.
 
-The target workflow is a **hybrid research architecture**:
+The target workflow is a **hybrid research architecture** with an API-first execution surface:
 
 - M1-M5 stage gates remain deterministic and explicitly defined.
 - An AI research controller may run bounded experiments inside those rules.
 - The AI may not redefine gates, silently promote a strategy, or bypass failed stages.
-- Existing `run_*.py` scripts should gradually become internal runners/adapters over reusable library modules.
-- A canonical orchestrator entrypoint should sit on top of those runners once the refactor lands.
+- The supported execution path should flow through `ResearchOrchestrator` and `src/research/tools.py`, not through ad hoc runner selection.
+- Legacy `run_*.py` scripts are quarantined under `scripts/legacy/` for provenance and comparison only.
+- `scripts/run_research_orchestrator.py` remains the only top-level orchestration CLI.
 
 ### Timezone And Session Handling
 
@@ -206,12 +207,12 @@ This does:
 4. Compute forward MFE/MAE over configured lookahead.
 5. Summarize signal quality and save immutable experiment artifacts.
 
-### Trade Simulation Backtest (Market Impulse)
+### Trade Simulation Backtest (Legacy Market Impulse Runner)
 
 Run:
 
 ```bash
-python scripts/run_market_impulse.py --tickers SPY QQQ IWM
+python scripts/legacy/run_market_impulse.py --tickers SPY QQQ IWM
 ```
 
 This does:
@@ -237,30 +238,30 @@ This does:
 3. Produces ratio-grid robustness (`1.0, 1.25, 1.5, 2.0`) with Monte Carlo probability of positive expectancy.
 4. Saves outputs in `data/results/` as summary and robustness CSV/JSON artifacts.
 
-### Opening Drive Classifier Backtest
+### Opening Drive Classifier Backtest (Legacy Runner)
 
 Run:
 
 ```bash
-uv run python scripts/run_opening_drive_classifier.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
+uv run python scripts/legacy/run_opening_drive_classifier.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
 ```
 
 This produces directional summary, robustness, and mode-level summary (`continue` vs `fail`).
 
-### Walk-Forward Out-of-Sample Validation
+### Walk-Forward Out-of-Sample Validation (Legacy Runner)
 
 Run:
 
 ```bash
-uv run python scripts/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
+uv run python scripts/legacy/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
 ```
 
 Registry-backed variants now supported:
 
 ```bash
-uv run python scripts/run_walk_forward_novel.py --strategy-source tracked
-uv run python scripts/run_walk_forward_novel.py --strategy-source validation
-uv run python scripts/run_walk_forward_novel.py --strategy-source tracked --strategy-names "Elastic Band z=1.25/w=360+dm"
+uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source tracked
+uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source validation
+uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source tracked --strategy-names "Elastic Band z=1.25/w=360+dm"
 ```
 
 This does:
@@ -270,19 +271,19 @@ This does:
 3. Tests selected ratio on the following out-of-sample window.
 4. Saves detailed and aggregated OOS results in `data/results/`.
 
-### Convergence Gate Pipeline
+### Convergence Gate Pipeline (Legacy Runner)
 
 Run:
 
 ```bash
-uv run python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
+uv run python scripts/legacy/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
 ```
 
 Focused convergence runs now support the same strategy-selection surface:
 
 ```bash
-uv run python scripts/run_convergence_pipeline.py --strategy-source validation
-uv run python scripts/run_convergence_pipeline.py --strategy-source tracked --strategy-names "Jerk-Pivot Momentum (tight)"
+uv run python scripts/legacy/run_convergence_pipeline.py --strategy-source validation
+uv run python scripts/legacy/run_convergence_pipeline.py --strategy-source tracked --strategy-names "Jerk-Pivot Momentum (tight)"
 ```
 
 This does:
@@ -292,12 +293,12 @@ This does:
 3. Applies promotion gates (windows, signal count, OOS hit-rate, expectancy floor).
 4. Produces a ranked shortlist for holdout promotion.
 
-### Holdout Validation (Promoted Candidates Only)
+### Holdout Validation (Promoted Candidates Only, Legacy Runner)
 
 Run:
 
 ```bash
-uv run python scripts/run_holdout_validation.py
+uv run python scripts/legacy/run_holdout_validation.py
 ```
 
 This does:
@@ -307,12 +308,12 @@ This does:
 3. Evaluates holdout-only expectancy across friction stress assumptions.
 4. Emits final holdout pass/fail promotion decisions.
 
-### Execution Mapping + Monte Carlo Stress (M6)
+### Execution Mapping + Monte Carlo Stress (M6, Legacy Runner)
 
 Run:
 
 ```bash
-python scripts/run_execution_mapping.py
+python scripts/legacy/run_execution_mapping.py
 ```
 
 This does:
@@ -368,11 +369,11 @@ The first reusable orchestration pieces now live in:
 - `src/research/stages/convergence.py`: reusable convergence gate logic,
 - `src/research/stages/holdout.py`: reusable holdout candidate selection, ratio fitting, and pass/fail summarization,
 - `src/research/stages/execution.py`: reusable execution mapping and Monte Carlo stage logic,
-- `scripts/run_research_orchestrator.py`: a thin CLI for inspecting tracked strategies, validation fixtures, and next allowed actions.
+- `scripts/run_research_orchestrator.py`: the only supported top-level orchestration CLI for inspecting tracked strategies, validation fixtures, and next allowed actions.
 
-The stage runners in `scripts/` now increasingly act as wrappers over these reusable modules instead of owning the research logic directly.
+Legacy stage runners now live under `scripts/legacy/`, and the active execution model is the reusable API surface in `src/research/` plus the top-level orchestrator preview CLI.
 
-The research runners now also use strategy-declared `required_features` to ask Newton only for the needed transforms during walk-forward, holdout, and execution mapping runs.
+The research flow also uses strategy-declared `required_features` to ask Newton only for the needed transforms, including `MarketImpulseTransform` through the same `enrich_for_features(...)` pipeline used by other strategies.
 
 A canonical execution pattern now exists for agentic research work:
 
@@ -391,10 +392,10 @@ result = orchestrator.run_action(
 
 Not every script in `scripts/` should be treated as equally supported.
 
-- Canonical research entrypoints: `run_research_orchestrator.py`, `run_walk_forward_novel.py`, `run_targeted_retune.py`, `run_convergence_pipeline.py`, `run_holdout_validation.py`, `run_execution_mapping.py`, and `query_results_db.py`
-- Supported specialized runner: `run_market_impulse.py`
-- Historical exploratory runners now live under `scripts/legacy/`.
-- Everything else should be treated as either `migrate_next` or archived legacy unless there is a specific reason to preserve it as-is.
+- Top-level orchestration CLI: `run_research_orchestrator.py`
+- Top-level utility: `query_results_db.py`
+- All runner-style CLIs now live under `scripts/legacy/`
+- New research execution should prefer `ResearchOrchestrator` and `src/research/tools.py` over direct legacy script use
 
 The current keep/migrate/archive decision table lives in [scripts/STATUS.md](/Users/suman/kg_env/projects/mala_v1/scripts/STATUS.md).
 

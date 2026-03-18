@@ -9,9 +9,9 @@ Executes the full pipeline with the Market Impulse strategy:
   4. Simulator → Bar-by-bar P&L with VMA-based exits
 
 Usage:
-    python scripts/run_market_impulse.py
-    python scripts/run_market_impulse.py --tickers SPY QQQ IWM
-    python scripts/run_market_impulse.py --start 2025-02-01 --end 2026-02-28
+    python scripts/legacy/run_market_impulse.py
+    python scripts/legacy/run_market_impulse.py --tickers SPY QQQ IWM
+    python scripts/legacy/run_market_impulse.py --start 2025-02-01 --end 2026-02-28
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from loguru import logger
 from rich.console import Console
@@ -155,15 +155,8 @@ def run() -> None:
 
         console.print(f"  Raw bars loaded: {len(df):,}")
 
-        # ── Physics enrichment (basic) ───────────────────────────────────
-        df = physics.enrich(df)
-
-        # ── Market Impulse enrichment (filters to market hours) ──────────
-        df = physics.enrich_market_impulse(
-            df,
-            vma_length=settings.vma_length,
-            vwma_periods=tuple(settings.vwma_periods),
-        )
+        required_features = set(strategy.required_features) | {simulator.vma_5m_col}
+        df = physics.enrich_for_features(df, required_features)
 
         console.print(f"  Market-hours bars: {len(df):,}")
 

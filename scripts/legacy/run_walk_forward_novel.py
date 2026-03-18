@@ -8,8 +8,8 @@ Approach:
 - Evaluate chosen ratio on next TEST window (out-of-sample).
 
 Usage:
-  python scripts/run_walk_forward_novel.py
-  python scripts/run_walk_forward_novel.py --train-months 6 --test-months 3
+  python scripts/legacy/run_walk_forward_novel.py
+  python scripts/legacy/run_walk_forward_novel.py --train-months 6 --test-months 3
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.chronos.storage import LocalStorage
 from src.config import settings

@@ -62,27 +62,9 @@ class PhysicsEngine:
         candidates = [
             transform
             for transform in self._registry.values()
-            if set(required_features) & transform.output_columns
+            if transform.name in required_features or set(required_features) & transform.output_columns
         ]
         return self._resolve_transforms(candidates)
-
-    def enrich_market_impulse(
-        self,
-        df: pl.DataFrame,
-        vma_length: int = 10,
-        vwma_periods: tuple[int, ...] = (8, 21, 34),
-        market_open: tuple[int, int] = (9, 30),
-        market_close: tuple[int, int] = (16, 0),
-        timeframe: str = "5m",
-    ) -> pl.DataFrame:
-        transform = MarketImpulseTransform(
-            vma_length=vma_length,
-            vwma_periods=vwma_periods,
-            timeframe=timeframe,
-            market_open=market_open,
-            market_close=market_close,
-        )
-        return self._apply_transforms(df, [transform])
 
     def _build_registry(self) -> dict[str, FeatureTransform]:
         transforms: list[FeatureTransform] = [

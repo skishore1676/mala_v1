@@ -15,8 +15,9 @@ architecture_decisions:
   notes: >
     Refactor target is a hybrid research workflow: keep M1-M5 gates explicit and
     deterministic while allowing an AI controller to run bounded experiments inside
-    those rules. Existing run scripts should gradually become adapters over reusable
-    library modules, with one canonical orchestrator entrypoint layered on top.
+    those rules. Runner-style scripts are now quarantined under scripts/legacy/ for
+    provenance, while the canonical execution surface is the reusable research API
+    plus one top-level orchestrator entrypoint.
     Current reusable seams include callable research tools, policy-driven reward:risk
     evaluation, and Newton feature-targeted enrichment through composable transforms
     plus a shared multi-timeframe resampler. The orchestrator can now invoke
@@ -49,18 +50,18 @@ research_agent:
 script_governance:
   canonical_runners:
     - run_research_orchestrator.py
-    - run_walk_forward_novel.py
-    - run_targeted_retune.py
-    - run_convergence_pipeline.py
-    - run_holdout_validation.py
-    - run_execution_mapping.py
     - query_results_db.py
-  supported_specialized:
-    - run_market_impulse.py
-  migrate_next:
-    - run_elastic_grid.py
-    - run_opening_drive_classifier.py
+  supported_specialized: []
+  migrate_next: []
   archived_legacy:
+    - legacy/run_elastic_grid.py
+    - legacy/run_walk_forward_novel.py
+    - legacy/run_targeted_retune.py
+    - legacy/run_convergence_pipeline.py
+    - legacy/run_holdout_validation.py
+    - legacy/run_execution_mapping.py
+    - legacy/run_market_impulse.py
+    - legacy/run_opening_drive_classifier.py
     - legacy/run_measurement_sensitivity.py
     - legacy/run_sweep.py
     - legacy/run_stage_flip.py
@@ -68,12 +69,10 @@ script_governance:
     - legacy/run_novel_ideas.py
     - legacy/run_p1_evaluation.py
   notes: >
-    The top-level scripts surface should converge toward a small set of canonical
-    research runners. Historical exploratory scripts have been moved under
-    scripts/legacy/ and should not receive new productized logic unless preserving
-    provenance is the explicit goal. Delete or move a script only after its unique
-    behavior is covered by reusable modules and the validation set still passes
-    through the supported path.
+    The top-level scripts surface is intentionally minimal: only the orchestrator
+    preview CLI and results query utility remain outside scripts/legacy/. Historical
+    and comparison runners are quarantined under scripts/legacy/ and should not
+    receive new productized logic unless preserving provenance is the explicit goal.
 
 refactor_validation:
   purpose: >

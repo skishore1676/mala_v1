@@ -11,8 +11,8 @@ Friction modes:
                        Converted to R units per-window per-direction using avg MAE.
 
 Usage:
-  uv run python scripts/run_elastic_grid.py --tickers SPY AAPL META IWM QQQ TSLA
-  uv run python scripts/run_elastic_grid.py --cost-bps 8 --tickers AAPL META
+  uv run python scripts/legacy/run_elastic_grid.py --tickers SPY AAPL META IWM QQQ TSLA
+  uv run python scripts/legacy/run_elastic_grid.py --cost-bps 8 --tickers AAPL META
 
 Output:
   - data/results/elastic_grid_detail_<stamp>.csv  (all window×direction rows)
@@ -31,7 +31,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.oracle.results_db import ResultsDB
 from src.research import ResearchOrchestrator, ResearchStage
