@@ -8,6 +8,7 @@ import numpy as np
 import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.research.stages.walk_forward import cost_r_from_bps
 from src.strategy.factory import build_strategy_by_name
 from src.time_utils import et_date_expr
@@ -43,14 +44,14 @@ def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_bps
 
     mfe = base["forward_mfe_eod"].to_numpy()
     mae = base["forward_mae_eod"].to_numpy()
-    wins = mfe >= (ratio * mae)
-    p = float(np.mean(wins))
+    policy = RewardRiskWinCondition(ratio=ratio)
+    p = policy.confidence(mfe, mae)
 
     avg_price = float(base["close"].mean())
     avg_mae_dollars = float(np.mean(mae))
     cost_r = cost_r_from_bps(cost_bps, avg_mae_dollars, avg_price)
 
-    exp_r = p * ratio - (1.0 - p) - cost_r
+    exp_r = policy.expectancy(mfe, mae, cost_r)
     return {"signals": int(len(mfe)), "confidence": round(p, 4), "exp_r": round(exp_r, 4)}
 
 

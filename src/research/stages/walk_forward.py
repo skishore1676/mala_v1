@@ -11,6 +11,7 @@ import polars as pl
 from dateutil.relativedelta import relativedelta
 
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.time_utils import et_date_expr
 
 
@@ -38,9 +39,9 @@ def build_windows(start: date, end: date, train_months: int, test_months: int) -
 
 
 def eval_ratio(mfe: np.ndarray, mae: np.ndarray, ratio: float, cost_r: float) -> tuple[float, float]:
-    wins = mfe >= (ratio * mae)
-    p = float(np.mean(wins)) if len(wins) else 0.0
-    exp_r = p * ratio - (1.0 - p) - cost_r
+    policy = RewardRiskWinCondition(ratio=ratio)
+    p = policy.confidence(mfe, mae)
+    exp_r = policy.expectancy(mfe, mae, cost_r)
     return p, exp_r
 
 

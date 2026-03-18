@@ -74,11 +74,13 @@ def print_strategy_plan(orchestrator: ResearchOrchestrator, strategy_name: str, 
 
     actions_table = Table(title=f"Next Allowed Actions ({stage.value})", show_lines=True)
     actions_table.add_column("Action")
+    actions_table.add_column("Tool")
     actions_table.add_column("Agent")
     actions_table.add_column("Summary")
     for action in actions:
         actions_table.add_row(
             action.action,
+            action.tool_name,
             "run" if action.agent_can_run else "recommend",
             action.summary,
         )

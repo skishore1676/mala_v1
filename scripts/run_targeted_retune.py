@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
+from src.strategy.base import required_feature_union
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 
@@ -50,9 +52,9 @@ def _score_group(mfe: np.ndarray, mae: np.ndarray, ratio: float, cost_r: float, 
     if n == 0:
         return {"signals": 0, "confidence": None, "exp_r": None, "prob_pos_exp": None}
 
-    wins = mfe >= ratio * mae
-    p = float(np.mean(wins))
-    exp_r = p * ratio - (1.0 - p) - cost_r
+    policy = RewardRiskWinCondition(ratio=ratio)
+    p = policy.confidence(mfe, mae)
+    exp_r = policy.expectancy(mfe, mae, cost_r)
 
     p_boot = rng.binomial(n=n, p=p, size=n_boot) / n
     exp_boot = p_boot * ratio - (1.0 - p_boot) - cost_r
@@ -96,6 +98,9 @@ def main() -> None:
     physics = PhysicsEngine()
     metrics = MetricsCalculator()
     rng = np.random.default_rng(7)
+    needed_features = required_feature_union(
+        [KinematicLadderStrategy(use_volume_filter=False), CompressionBreakoutStrategy(use_volume_filter=False)]
+    )
 
     # Param grids
     kinematic_grid = list(product(
@@ -126,7 +131,7 @@ def main() -> None:
         df = storage.load_bars(ticker, args.start, args.end)
         if df.is_empty():
             continue
-        df = physics.enrich(df)
+        df = physics.enrich_for_features(df, needed_features)
 
         # Kinematic
         for regime_window, accel_window, vol_mult, sess in kinematic_grid:

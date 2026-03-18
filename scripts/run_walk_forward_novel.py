@@ -32,6 +32,7 @@ from src.oracle.metrics import MetricsCalculator
 from src.oracle.results_db import ResultsDB
 from src.research.registry import ResearchRegistry
 from src.research.stages import aggregate_walk_forward, build_windows, run_walk_forward_for_strategies
+from src.strategy.base import required_feature_union
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
@@ -157,6 +158,7 @@ def main() -> None:
         return
 
     rows: list[dict] = []
+    needed_features = required_feature_union(strategies)
 
     console.rule("[bold cyan]Walk-Forward Evaluation[/]")
     friction_desc = (
@@ -173,7 +175,7 @@ def main() -> None:
         df = storage.load_bars(ticker, args.start, args.end)
         if df.is_empty():
             continue
-        df = physics.enrich(df)
+        df = physics.enrich_for_features(df, needed_features)
         rows.extend(
             run_walk_forward_for_strategies(
                 ticker=ticker,

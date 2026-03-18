@@ -1,5 +1,6 @@
 """Tests for strategy factory helper."""
 
+from src.strategy.base import required_feature_union
 from src.strategy.factory import available_strategy_names, build_strategy, build_strategy_by_name
 
 
@@ -25,3 +26,16 @@ def test_available_strategy_names_includes_research_candidates() -> None:
     names = available_strategy_names()
     assert "Jerk-Pivot Momentum (tight)" in names
     assert "Opening Drive v2 (Short Continue)" in names
+
+
+def test_required_feature_union_combines_strategy_dependencies() -> None:
+    strategies = [
+        build_strategy("Elastic Band Reversion"),
+        build_strategy("Opening Drive Classifier"),
+    ]
+
+    features = required_feature_union(strategies)
+
+    assert "vpoc_4h" in features
+    assert "velocity_1m" in features
+    assert "timestamp" in features

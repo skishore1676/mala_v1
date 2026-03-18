@@ -10,6 +10,7 @@ from src.research.models import (
 from src.research.orchestrator import ResearchOrchestrator
 from src.research.registry import ResearchRegistry
 from src.research.state import load_research_state
+from src.research.tools import ResearchToolResult, ResearchToolbox
 
 __all__ = [
     "OrchestrationAction",
@@ -17,6 +18,8 @@ __all__ = [
     "ResearchOrchestrator",
     "ResearchRegistry",
     "ResearchStage",
+    "ResearchToolResult",
+    "ResearchToolbox",
     "StrategyCatalogEntry",
     "StrategyStatus",
     "load_research_state",

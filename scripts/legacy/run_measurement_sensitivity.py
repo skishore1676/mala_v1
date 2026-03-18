@@ -2,12 +2,15 @@
 """
 Measurement Sensitivity + Monte Carlo Wrapper
 
+Legacy exploratory script.
+Prefer the canonical research runners and callable evaluation tools for new work.
+
 Compares multiple reward:risk thresholds (e.g., 1:1, 1.5:1, 2:1)
 using directional forward metrics and bootstrap confidence intervals.
 
 Usage:
-  python scripts/run_measurement_sensitivity.py
-  python scripts/run_measurement_sensitivity.py --ratios 1.0,1.5,2.0 --bootstrap-iters 5000
+  python scripts/legacy/run_measurement_sensitivity.py
+  python scripts/legacy/run_measurement_sensitivity.py --ratios 1.0,1.5,2.0 --bootstrap-iters 5000
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ from src.chronos.storage import LocalStorage
 from src.config import settings
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
+from src.strategy.base import required_feature_union
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 
@@ -93,15 +98,15 @@ def _evaluate_group(
             "prob_positive_exp": None,
         }
 
-    wins = mfe >= (ratio * mae)
-    p_hat = float(np.mean(wins))
+    policy = RewardRiskWinCondition(ratio=ratio)
+    p_hat = policy.confidence(mfe, mae)
 
     # If payoff is +ratio R for winners and -1 R for losers:
     # E[R] = p*ratio - (1-p) - cost_r
     # Break-even p = (1 + cost_r) / (1 + ratio)
     p_be = float((1.0 + cost_r) / (1.0 + ratio))
 
-    exp_r = p_hat * ratio - (1.0 - p_hat) - cost_r
+    exp_r = policy.expectancy(mfe, mae, cost_r)
 
     # Bootstrap distribution of win probability (Bernoulli approximation)
     p_boot = rng.binomial(n=n, p=p_hat, size=n_boot) / n
@@ -176,6 +181,7 @@ def main() -> None:
             use_time_filter=True,
         ),
     ]
+    needed_features = required_feature_union(strategies)
 
     console.rule("[bold cyan]Measurement Sensitivity + Monte Carlo[/]")
     console.print(
@@ -189,7 +195,7 @@ def main() -> None:
         df = storage.load_bars(ticker, args.start, args.end)
         if df.is_empty():
             continue
-        df = physics.enrich(df)
+        df = physics.enrich_for_features(df, needed_features)
 
         for strategy in strategies:
             df_sig = strategy.generate_signals(df.clone())

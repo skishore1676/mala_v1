@@ -98,3 +98,4 @@ class OrchestrationAction:
     action: str
     summary: str
     agent_can_run: bool
+    tool_name: str

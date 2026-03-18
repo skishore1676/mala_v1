@@ -29,6 +29,8 @@ from src.research.stages import (
     run_execution_mapping_for_candidates,
     promoted_candidates_from_holdout,
 )
+from src.strategy.base import required_feature_union
+from src.strategy.factory import build_strategy_by_name
 
 
 console = Console()
@@ -121,13 +123,17 @@ def main() -> None:
     physics = PhysicsEngine()
     metrics = MetricsCalculator()
     stress_cfg = ExecutionStressConfig(bootstrap_iters=args.bootstrap_iters)
+    candidate_strategies = [
+        build_strategy_by_name(name) for name in promoted["strategy"].unique().to_list()
+    ]
+    needed_features = required_feature_union(candidate_strategies)
 
     ticker_frames: dict[str, pl.DataFrame] = {}
     for ticker in promoted["ticker"].unique().to_list():
         raw = storage.load_bars(ticker, args.start, args.holdout_end)
         if raw.is_empty():
             continue
-        ticker_frames[ticker] = physics.enrich(raw)
+        ticker_frames[ticker] = physics.enrich_for_features(raw, needed_features)
 
     rows = run_execution_mapping_for_candidates(
         promoted=promoted,

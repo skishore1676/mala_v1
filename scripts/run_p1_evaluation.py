@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 import sys
@@ -31,7 +30,6 @@ from itertools import product
 
 import numpy as np
 import polars as pl
-from dateutil.relativedelta import relativedelta
 from rich.console import Console
 from rich.table import Table
 
@@ -40,7 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.oracle.results_db import ResultsDB
+from src.research.stages import Window, build_windows, cost_r_from_bps
+from src.strategy.base import required_feature_union
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
@@ -91,36 +92,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", default="data/results")
     return p.parse_args()
 
-
-@dataclass
-class Window:
-    train_start: date
-    train_end: date
-    test_start: date
-    test_end: date
-
-
-def build_windows(start: date, end: date, train_months: int, test_months: int) -> list[Window]:
-    windows: list[Window] = []
-    cursor = start
-    while True:
-        ts = cursor
-        te = ts + relativedelta(months=train_months) - relativedelta(days=1)
-        vs = te + relativedelta(days=1)
-        ve = vs + relativedelta(months=test_months) - relativedelta(days=1)
-        if ve > end:
-            break
-        windows.append(Window(ts, te, vs, ve))
-        cursor += relativedelta(months=test_months)
-    return windows
-
-
-def cost_r_from_bps(cost_bps: float, avg_mae_d: float, avg_entry: float) -> float:
-    if avg_mae_d <= 0 or avg_entry <= 0:
-        return 0.05
-    return (avg_entry * cost_bps / 10_000.0) / avg_mae_d
-
-
 def eval_window_direction(
     df_eval: pl.DataFrame,
     direction: str,
@@ -147,15 +118,14 @@ def eval_window_direction(
 
     best_exp, best_ratio = -1e9, ratios[0]
     for ratio in ratios:
-        wins = mfe >= ratio * mae
-        p = float(np.mean(wins))
-        exp_r = p * ratio - (1.0 - p) - effective_cost_r
+        policy = RewardRiskWinCondition(ratio=ratio)
+        exp_r = policy.expectancy(mfe, mae, effective_cost_r)
         if exp_r > best_exp:
             best_exp, best_ratio = exp_r, ratio
 
-    wins = mfe >= best_ratio * mae
-    p = float(np.mean(wins))
-    exp_r = p * best_ratio - (1.0 - p) - effective_cost_r
+    best_policy = RewardRiskWinCondition(ratio=best_ratio)
+    p = best_policy.confidence(mfe, mae)
+    exp_r = best_policy.expectancy(mfe, mae, effective_cost_r)
     return {
         "signals": n,
         "exp_r": round(exp_r, 4),
@@ -581,6 +551,11 @@ def main() -> None:
     storage = LocalStorage()
     physics  = PhysicsEngine()
     metrics  = MetricsCalculator()
+    needed_features = required_feature_union([
+        KinematicLadderStrategy(use_volume_filter=False),
+        CompressionBreakoutStrategy(use_volume_filter=False),
+        ElasticBandReversionStrategy(use_directional_mass=False),
+    ])
 
     tickers_data: dict[str, pl.DataFrame] = {}
     for ticker in args.tickers:
@@ -588,7 +563,7 @@ def main() -> None:
         if df.is_empty():
             console.print(f"[yellow]No data for {ticker}, skipping[/]")
             continue
-        tickers_data[ticker] = physics.enrich(df)
+        tickers_data[ticker] = physics.enrich_for_features(df, needed_features)
 
     if not tickers_data:
         console.print("[red]No ticker data loaded. Exiting.[/]")

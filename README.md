@@ -44,6 +44,7 @@ The current architectural pressure point is not `Chronos`; it is orchestration a
 
 - `Chronos` remains the stable data foundation for now.
 - `Newton` is moving toward composable feature transforms plus centralized multi-timeframe handling instead of letting MTF logic spread into scripts.
+- `Newton` now exposes a composable transform pipeline and reusable timeframe resampler while keeping `PhysicsEngine` as the compatibility facade.
 - `Oracle` is moving toward a cleaner split between evaluation policy, simulation logic, and persistence/reporting.
 - `Strategy` is moving toward richer metadata for orchestration, including required features, parameter space, and evaluation mode.
 
@@ -69,8 +70,9 @@ Polygon API (1-min OHLCV)
   -> Chronos storage saves daily parquet: data/<TICKER>/<YYYY-MM-DD>.parquet
   -> load_bars(ticker, start, end)
   -> Newton enrich():
-       velocity_1m, accel_1m, jerk_1m, ema_*, volume_ma_*,
-       internal_strength, directional_mass, directional_mass_ma_*, vpoc_4h
+       feature-targeted transform pipeline based on selected strategy requirements
+       (velocity_1m, accel_1m, jerk_1m, ema_*, volume_ma_*,
+       internal_strength, directional_mass, directional_mass_ma_*, vpoc_4h, MTF features)
   -> Strategy generate_signals():
        signal (and signal_direction for directional strategies)
   -> Oracle:
@@ -84,6 +86,13 @@ Polygon API (1-min OHLCV)
 ## How Metrics Are Calculated
 
 ### Physics Features (Newton)
+
+Newton can now be used in two ways:
+
+- compatibility mode: `PhysicsEngine.enrich(df)` applies the default core transform set,
+- feature-targeted mode: `PhysicsEngine.enrich_for_features(df, required_features)` builds only the transforms needed for the selected strategies.
+
+For multi-timeframe research, `MarketImpulseTransform` now uses a reusable `TimeframeResampler` so higher-timeframe joins are handled consistently instead of being hand-coded inside scripts.
 
 - `velocity_1m = close[t] - close[t-1]`
 - `accel_1m = velocity_1m[t] - velocity_1m[t-1]`
@@ -354,6 +363,7 @@ Future agentic workflow work should treat that file as the canonical operating b
 The first reusable orchestration pieces now live in:
 
 - `src/research/registry.py`: repo-memory-backed strategy discovery and instantiation,
+- `src/research/tools.py`: callable experiment tools (`parameter_sweep`, `baseline_comparison`, `ablation_check`, `walk_forward`, `holdout_validation`, `execution_mapping`),
 - `src/research/stages/walk_forward.py`: reusable walk-forward math and aggregation,
 - `src/research/stages/convergence.py`: reusable convergence gate logic,
 - `src/research/stages/holdout.py`: reusable holdout candidate selection, ratio fitting, and pass/fail summarization,
@@ -361,6 +371,19 @@ The first reusable orchestration pieces now live in:
 - `scripts/run_research_orchestrator.py`: a thin CLI for inspecting tracked strategies, validation fixtures, and next allowed actions.
 
 The stage runners in `scripts/` now increasingly act as wrappers over these reusable modules instead of owning the research logic directly.
+
+The research runners now also use strategy-declared `required_features` to ask Newton only for the needed transforms during walk-forward, holdout, and execution mapping runs.
+
+## Script Governance
+
+Not every script in `scripts/` should be treated as equally supported.
+
+- Canonical research entrypoints: `run_research_orchestrator.py`, `run_walk_forward_novel.py`, `run_convergence_pipeline.py`, `run_holdout_validation.py`, `run_execution_mapping.py`, and `query_results_db.py`
+- Supported specialized runner: `run_market_impulse.py`
+- Historical exploratory runners now live under `scripts/legacy/`.
+- Everything else should be treated as either `migrate_next` or archived legacy unless there is a specific reason to preserve it as-is.
+
+The current keep/migrate/archive decision table lives in [scripts/STATUS.md](/Users/suman/kg_env/projects/mala_v1/scripts/STATUS.md).
 
 ## How Success Is Measured
 

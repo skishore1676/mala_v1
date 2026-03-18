@@ -21,7 +21,9 @@ from src.chronos.storage import LocalStorage
 from src.config import settings
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.oracle.results_db import ResultsDB
+from src.strategy.base import required_feature_union
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 
 
@@ -71,10 +73,10 @@ def eval_ratio_grid(
     if n == 0:
         return rows
     for ratio in ratios:
-        wins = mfe >= (ratio * mae)
-        p_hat = float(np.mean(wins))
+        policy = RewardRiskWinCondition(ratio=ratio)
+        p_hat = policy.confidence(mfe, mae)
         p_be = float((1.0 + cost_r) / (1.0 + ratio))
-        exp_r = p_hat * ratio - (1.0 - p_hat) - cost_r
+        exp_r = policy.expectancy(mfe, mae, cost_r)
         p_boot = rng.binomial(n=n, p=p_hat, size=bootstrap_iters) / n
         exp_boot = p_boot * ratio - (1.0 - p_boot) - cost_r
         rows.append({
@@ -98,12 +100,16 @@ def print_summary_table(ticker: str, summary: pl.DataFrame) -> None:
     table.add_column("Wins", justify="right")
     table.add_column("Confidence(2:1)", justify="right")
     table.add_column("Avg MFE/MAE", justify="right")
+    confidence_col = "confidence_2to1" if "confidence_2to1" in summary.columns else next(
+        (col for col in summary.columns if col.startswith("confidence_")),
+        "confidence_2to1",
+    )
     for row in summary.iter_rows(named=True):
         table.add_row(
             str(row.get("direction")),
             str(row.get("total_signals")),
             str(row.get("wins")),
-            f"{float(row.get('confidence_2to1', 0.0)):.2%}",
+            f"{float(row.get(confidence_col, 0.0)):.2%}",
             str(row.get("avg_mfe_mae_ratio")),
         )
     console.print(table)
@@ -158,6 +164,7 @@ def main() -> None:
         enable_fail=enable_fail,
         strategy_label=args.strategy_label if args.strategy_label else None,
     )
+    needed_features = required_feature_union([strategy])
 
     summary_rows: list[dict] = []
     robustness_rows: list[dict] = []
@@ -176,7 +183,7 @@ def main() -> None:
             console.print(f"[yellow]No data for {ticker}, skipping.[/]")
             continue
 
-        df = physics.enrich(df)
+        df = physics.enrich_for_features(df, needed_features)
         df_sig = strategy.generate_signals(df)
         if df_sig.filter(pl.col("signal")).is_empty():
             console.print("[yellow]No signals.[/]")

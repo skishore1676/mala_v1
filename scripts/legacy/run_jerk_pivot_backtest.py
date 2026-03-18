@@ -2,13 +2,16 @@
 """
 Standalone backtest for Jerk-Pivot Momentum Strategy.
 
+Legacy exploratory script.
+Prefer the registry-backed research flow for current evaluation work.
+
 By default generates synthetic 1-min OHLCV data for SPY/IWM using realistic
 GBM parameters. Use --real-data to fetch real market data from Polygon.io.
 
 Usage:
-    python3 scripts/run_jerk_pivot_backtest.py                          # synthetic
-    python3 scripts/run_jerk_pivot_backtest.py --real-data              # real data from Polygon
-    python3 scripts/run_jerk_pivot_backtest.py --real-data --tickers SPY IWM --start 2024-01-01 --end 2026-02-28
+    python3 scripts/legacy/run_jerk_pivot_backtest.py                          # synthetic
+    python3 scripts/legacy/run_jerk_pivot_backtest.py --real-data              # real data from Polygon
+    python3 scripts/legacy/run_jerk_pivot_backtest.py --real-data --tickers SPY IWM --start 2024-01-01 --end 2026-02-28
 """
 
 from __future__ import annotations

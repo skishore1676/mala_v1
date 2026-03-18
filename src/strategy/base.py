@@ -8,6 +8,7 @@ a boolean signal column indicating where setups trigger.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any
 
 import polars as pl
@@ -51,3 +52,11 @@ class BaseStrategy(ABC):
 
     def __repr__(self) -> str:
         return f"<Strategy: {self.name}>"
+
+
+def required_feature_union(strategies: Iterable[BaseStrategy]) -> set[str]:
+    """Return the union of declared feature dependencies for the given strategies."""
+    required: set[str] = set()
+    for strategy in strategies:
+        required |= set(strategy.required_features)
+    return required

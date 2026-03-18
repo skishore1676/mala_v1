@@ -1,10 +1,14 @@
 """Tests for the Newton Physics Engine."""
 
+from datetime import datetime, timedelta
+
 import numpy as np
 import polars as pl
 import pytest
 
 from src.newton.engine import PhysicsEngine
+from src.newton.resampler import TimeframeResampler
+from src.newton.transforms import JerkTransform, MarketImpulseTransform
 
 
 @pytest.fixture
@@ -111,3 +115,71 @@ class TestPhysicsEngine:
         engine = PhysicsEngine()
         with pytest.raises(ValueError, match="missing required columns"):
             engine.enrich(df)
+
+    def test_pipeline_resolves_dependencies_for_subset_transforms(
+        self,
+        sample_ohlcv: pl.DataFrame,
+    ) -> None:
+        engine = PhysicsEngine(transforms=[JerkTransform()])
+        result = engine.enrich(sample_ohlcv)
+
+        assert {"velocity_1m", "accel_1m", "jerk_1m"}.issubset(result.columns)
+        assert "vpoc_4h" not in result.columns
+        assert "ema_20" not in result.columns
+
+    def test_enrich_for_features_builds_minimal_pipeline(
+        self,
+        sample_ohlcv: pl.DataFrame,
+    ) -> None:
+        engine = PhysicsEngine(vpoc_lookback=50, ema_periods=[4, 8, 12])
+        result = engine.enrich_for_features(sample_ohlcv, {"jerk_1m", "vpoc_4h"})
+
+        assert {"velocity_1m", "accel_1m", "jerk_1m", "vpoc_4h"}.issubset(result.columns)
+        assert "ema_4" not in result.columns
+        assert "directional_mass" not in result.columns
+
+
+def test_resampler_joins_without_lookahead() -> None:
+    timestamps = [datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i) for i in range(6)]
+    base = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1, 2, 3, 4, 5, 6],
+            "high": [1, 2, 3, 4, 5, 6],
+            "low": [1, 2, 3, 4, 5, 6],
+            "close": [1, 2, 3, 4, 5, 6],
+            "volume": [10, 10, 10, 10, 10, 10],
+        }
+    )
+    resampler = TimeframeResampler()
+    five_min = resampler.resample_ohlcv(base, every="5m").with_columns(
+        pl.Series("regime_5m", ["first", "second"])
+    )
+
+    joined = resampler.join_timeframe_features(
+        base,
+        five_min,
+        every="5m",
+        feature_columns=["regime_5m"],
+    )
+    assert joined["regime_5m"].to_list() == ["first", "first", "first", "first", "first", "second"]
+
+
+def test_market_impulse_transform_supports_custom_timeframe() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    engine = PhysicsEngine(transforms=[MarketImpulseTransform(timeframe="15m")])
+    result = engine.enrich(df)
+
+    assert "impulse_regime_15m" in result.columns
+    assert "impulse_stage_15m" in result.columns
+    assert "vma_10_15m" in result.columns

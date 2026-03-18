@@ -17,6 +17,9 @@ architecture_decisions:
     deterministic while allowing an AI controller to run bounded experiments inside
     those rules. Existing run scripts should gradually become adapters over reusable
     library modules, with one canonical orchestrator entrypoint layered on top.
+    Current reusable seams include callable research tools, policy-driven reward:risk
+    evaluation, and Newton feature-targeted enrichment through composable transforms
+    plus a shared multi-timeframe resampler.
 
 research_agent:
   name: research-experiment-agent
@@ -33,6 +36,7 @@ research_agent:
     - Translate a raw idea into a testable strategy hypothesis.
     - Select the smallest valid next experiment for the current stage.
     - Run bounded sweeps, ablations, walk-forward evaluation, holdout checks, and comparisons.
+    - Use the callable research tool surface and strategy metadata to run feature-aware experiments.
     - Query prior artifacts and results to avoid repeating known dead ends.
     - Write reasoning and recommend the next deterministic state transition.
   forbidden_tasks:
@@ -40,6 +44,35 @@ research_agent:
     - Silently promote a strategy outside the deterministic rules.
     - Cherry-pick favorable evidence and present it as a general result.
     - Rewrite strategy code unless explicitly asked for implementation work.
+
+script_governance:
+  canonical_runners:
+    - run_research_orchestrator.py
+    - run_walk_forward_novel.py
+    - run_convergence_pipeline.py
+    - run_holdout_validation.py
+    - run_execution_mapping.py
+    - query_results_db.py
+  supported_specialized:
+    - run_market_impulse.py
+  migrate_next:
+    - run_novel_ideas.py
+    - run_elastic_grid.py
+    - run_targeted_retune.py
+    - run_p1_evaluation.py
+    - run_opening_drive_classifier.py
+  archived_legacy:
+    - legacy/run_measurement_sensitivity.py
+    - legacy/run_sweep.py
+    - legacy/run_stage_flip.py
+    - legacy/run_jerk_pivot_backtest.py
+  notes: >
+    The top-level scripts surface should converge toward a small set of canonical
+    research runners. Historical exploratory scripts have been moved under
+    scripts/legacy/ and should not receive new productized logic unless preserving
+    provenance is the explicit goal. Delete or move a script only after its unique
+    behavior is covered by reusable modules and the validation set still passes
+    through the supported path.
 
 refactor_validation:
   purpose: >
@@ -49,6 +82,7 @@ refactor_validation:
   success_criteria:
     - Strategy instantiates from the new orchestration layer without manual script edits.
     - Strategy generates signals with required features resolved automatically.
+    - Research runners request only the Newton features required by the selected strategies.
     - Strategy can complete at least the walk-forward stage through the new workflow.
     - Output artifacts remain comparable enough to previous runs to detect regressions.
   strategies:

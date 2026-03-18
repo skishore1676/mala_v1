@@ -27,7 +27,9 @@ from src.chronos.storage import LocalStorage
 from src.config import settings
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.oracle.results_db import ResultsDB
+from src.strategy.base import required_feature_union
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
@@ -105,10 +107,11 @@ def _evaluate_ratio_grid(
         return rows
 
     for ratio in ratios:
-        wins = mfe >= (ratio * mae)
-        p_hat = float(np.mean(wins))
+        policy = RewardRiskWinCondition(ratio=ratio)
+        wins = policy.flags(mfe, mae)
+        p_hat = policy.confidence(mfe, mae)
         p_be = float((1.0 + cost_r) / (1.0 + ratio))
-        exp_r = p_hat * ratio - (1.0 - p_hat) - cost_r
+        exp_r = policy.expectancy(mfe, mae, cost_r)
 
         p_boot = rng.binomial(n=n, p=p_hat, size=bootstrap_iters) / n
         exp_boot = p_boot * ratio - (1.0 - p_boot) - cost_r
@@ -225,6 +228,7 @@ def main() -> None:
             strategy_label="Opening Drive v2 (Short Continue)",
         ),
     ]
+    needed_features = required_feature_union(strategies)
 
     results_rows: list[dict] = []
     robustness_rows: list[dict] = []
@@ -243,7 +247,7 @@ def main() -> None:
             console.print(f"[yellow]No data for {ticker}, skipping.[/]")
             continue
 
-        df = physics.enrich(df)
+        df = physics.enrich_for_features(df, needed_features)
 
         for strategy in strategies:
             df_sig = strategy.generate_signals(df.clone())

@@ -6,25 +6,26 @@ from pathlib import Path
 
 from src.research.models import OrchestrationAction, ResearchStage, StrategyCatalogEntry
 from src.research.registry import ResearchRegistry
+from src.research.tools import ResearchToolbox
 
 
-_STAGE_ACTIONS: dict[ResearchStage, list[tuple[str, str]]] = {
+_STAGE_ACTIONS: dict[ResearchStage, list[tuple[str, str, str]]] = {
     ResearchStage.M1_DISCOVERY: [
-        ("parameter_sweep", "Search for any edge in the declared parameter space."),
-        ("baseline_comparison", "Compare the candidate against the refactor validation baselines."),
+        ("parameter_sweep", "parameter_sweep", "Search for any edge in the declared parameter space."),
+        ("baseline_comparison", "baseline_comparison", "Compare the candidate against the refactor validation baselines."),
     ],
     ResearchStage.M2_CONVERGENCE: [
-        ("convergence_grid", "Stress the candidate across friction and stability assumptions."),
-        ("ablation_check", "Test whether the proposed edge survives key feature removal."),
+        ("convergence_grid", "convergence_grid", "Stress the candidate across friction and stability assumptions."),
+        ("ablation_check", "ablation_check", "Test whether the proposed edge survives key feature removal."),
     ],
     ResearchStage.M3_WALK_FORWARD: [
-        ("walk_forward", "Select parameters on train windows and verify OOS adaptation."),
+        ("walk_forward", "walk_forward", "Select parameters on train windows and verify OOS adaptation."),
     ],
     ResearchStage.M4_HOLDOUT: [
-        ("holdout_validation", "Evaluate the untouched quarantine segment without retuning."),
+        ("holdout_validation", "holdout_validation", "Evaluate the untouched quarantine segment without retuning."),
     ],
     ResearchStage.M5_EXECUTION: [
-        ("execution_mapping", "Map the edge to practical execution assumptions and stress it."),
+        ("execution_mapping", "execution_mapping", "Map the edge to practical execution assumptions and stress it."),
     ],
 }
 
@@ -34,6 +35,7 @@ class ResearchOrchestrator:
 
     def __init__(self, state_path: Path | None = None) -> None:
         self.registry = ResearchRegistry(state_path)
+        self._state_path = state_path
 
     def validation_entries(self) -> list[StrategyCatalogEntry]:
         return self.registry.validation_entries()
@@ -50,6 +52,10 @@ class ResearchOrchestrator:
                 action=action,
                 summary=summary,
                 agent_can_run=agent_can_run,
+                tool_name=tool_name,
             )
-            for action, summary in _STAGE_ACTIONS[stage]
+            for action, tool_name, summary in _STAGE_ACTIONS[stage]
         ]
+
+    def toolbox(self) -> ResearchToolbox:
+        return ResearchToolbox(self._state_path)

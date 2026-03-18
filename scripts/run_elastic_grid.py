@@ -30,7 +30,6 @@ import sys
 
 import numpy as np
 import polars as pl
-from dateutil.relativedelta import relativedelta
 from rich.console import Console
 from rich.table import Table
 
@@ -39,7 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
+from src.oracle.policies import RewardRiskWinCondition
 from src.oracle.results_db import ResultsDB
+from src.research.stages import build_windows, cost_r_from_bps
+from src.strategy.base import required_feature_union
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.time_utils import et_date_expr
 
@@ -75,46 +77,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", default="data/results")
     return p.parse_args()
 
-
-def build_windows(start: date, end: date, train_months: int, test_months: int):
-    from dataclasses import dataclass
-
-    @dataclass
-    class Window:
-        train_start: date
-        train_end: date
-        test_start: date
-        test_end: date
-
-    windows = []
-    cursor = start
-    while True:
-        ts = cursor
-        te = ts + relativedelta(months=train_months) - relativedelta(days=1)
-        vs = te + relativedelta(days=1)
-        ve = vs + relativedelta(months=test_months) - relativedelta(days=1)
-        if ve > end:
-            break
-        windows.append(Window(ts, te, vs, ve))
-        cursor += relativedelta(months=test_months)
-    return windows
-
-
-def cost_r_from_bps(cost_bps: float, avg_mae_dollars: float, entry_price: float) -> float:
-    """
-    Convert a basis-point transaction cost to reward:risk units.
-
-    cost_dollars = entry_price * cost_bps / 10_000
-    cost_r       = cost_dollars / avg_mae_dollars
-
-    If avg_mae_dollars is tiny / zero we fall back to a small fixed value.
-    """
-    if avg_mae_dollars is None or avg_mae_dollars <= 0:
-        return 0.05  # safe fallback
-    cost_dollars = entry_price * cost_bps / 10_000.0
-    return cost_dollars / avg_mae_dollars
-
-
 def eval_direction(
     df: pl.DataFrame,
     direction: str,
@@ -139,9 +101,9 @@ def eval_direction(
     avg_entry = float(base["close"].mean()) if "close" in base.columns else 0.0
     avg_mae = float(np.mean(mae))
 
-    wins = mfe >= (ratio * mae)
-    p = float(np.mean(wins))
-    exp_r = p * ratio - (1.0 - p) - cost_r
+    policy = RewardRiskWinCondition(ratio=ratio)
+    p = policy.confidence(mfe, mae)
+    exp_r = policy.expectancy(mfe, mae, cost_r)
     return {
         "signals": n,
         "confidence": round(p, 4),
@@ -199,6 +161,7 @@ def main() -> None:
     storage = LocalStorage()
     physics  = PhysicsEngine()
     metrics  = MetricsCalculator()
+    needed_features = required_feature_union([ElasticBandReversionStrategy()])
 
     grid_params = list(product(Z_THRESHOLDS, Z_WINDOWS))
     all_detail_rows: list[dict] = []
@@ -209,7 +172,7 @@ def main() -> None:
         if df_raw.is_empty():
             console.print(f"[yellow]  No cached data for {ticker}, skipping.[/]")
             continue
-        df_raw = physics.enrich(df_raw)
+        df_raw = physics.enrich_for_features(df_raw, needed_features)
 
         for (z_thresh, z_win) in grid_params:
             label = f"z={z_thresh:.2f}/w={z_win}"

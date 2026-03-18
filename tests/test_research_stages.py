@@ -8,6 +8,7 @@ import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
+from src.oracle.policies import RewardRiskWinCondition
 from src.research.stages import (
     aggregate_walk_forward,
     build_gate_report,
@@ -79,6 +80,17 @@ def test_evaluate_df_combined() -> None:
     assert result["signals"] == 2
     assert result["confidence"] == 1.0
     assert result["exp_r"] == 1.45
+
+
+def test_metrics_calculator_supports_custom_win_policy() -> None:
+    metrics = MetricsCalculator(
+        win_condition=RewardRiskWinCondition(ratio=1.5, label="1p5to1")
+    )
+    enriched = metrics.add_directional_forward_metrics(_sample_eval_df(), snapshot_windows=())
+    assert "win_1p5to1" in enriched.columns
+
+    summary = metrics.summarise_directional_signals(enriched)
+    assert "confidence_1p5to1" in summary.columns
 
 
 def test_aggregate_walk_forward() -> None:

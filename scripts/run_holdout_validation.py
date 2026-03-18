@@ -33,6 +33,8 @@ from src.research.stages import (
     run_holdout_validation_for_candidates,
     summarize_holdout,
 )
+from src.strategy.base import required_feature_union
+from src.strategy.factory import build_strategy_by_name
 
 
 console = Console()
@@ -106,6 +108,10 @@ def main() -> None:
     storage = LocalStorage()
     physics = PhysicsEngine()
     metrics = MetricsCalculator()
+    candidate_strategies = [
+        build_strategy_by_name(name) for name in promoted["strategy"].unique().to_list()
+    ]
+    needed_features = required_feature_union(candidate_strategies)
 
     # cache enriched data by ticker
     ticker_frames: dict[str, pl.DataFrame] = {}
@@ -113,7 +119,7 @@ def main() -> None:
         raw = storage.load_bars(ticker, args.start, args.holdout_end)
         if raw.is_empty():
             continue
-        ticker_frames[ticker] = physics.enrich(raw)
+        ticker_frames[ticker] = physics.enrich_for_features(raw, needed_features)
 
     detail_rows = run_holdout_validation_for_candidates(
         promoted=promoted,

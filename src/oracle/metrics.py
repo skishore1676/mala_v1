@@ -19,6 +19,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.oracle.policies import RewardRiskWinCondition
 from src.time_utils import et_date_expr
 
 
@@ -28,8 +29,18 @@ class MetricsCalculator:
     def __init__(
         self,
         forward_window: int = settings.forward_window_bars,
+        win_condition: RewardRiskWinCondition | None = None,
     ) -> None:
         self.forward_window = forward_window
+        self.win_condition = win_condition or RewardRiskWinCondition()
+
+    @property
+    def directional_win_column(self) -> str:
+        return self.win_condition.directional_column()
+
+    @property
+    def directional_confidence_column(self) -> str:
+        return f"confidence_{self.win_condition.label_suffix}"
 
     # ── Public ───────────────────────────────────────────────────────────
 
@@ -65,9 +76,7 @@ class MetricsCalculator:
         # Win = MFE > 2× MAE (reward/risk > 2)
         mfe_col = f"forward_mfe_{self.forward_window}"
         mae_col = f"forward_mae_{self.forward_window}"
-        df = df.with_columns(
-            (pl.col(mfe_col) > 2.0 * pl.col(mae_col)).alias("win")
-        )
+        df = df.with_columns(self.win_condition.expr(mfe_col, mae_col).alias("win"))
 
         logger.info("Forward metrics added (window = {} bars)", self.forward_window)
         return df
@@ -244,10 +253,10 @@ class MetricsCalculator:
                 pl.Series(f"forward_mae_{window}", mae_w),
             ])
 
-        # ── Win flag: MFE ≥ 2× MAE (end-of-day) ────────────────────────
+        # ── Win flag: reward:risk threshold on end-of-day excursion ────
         df = df.with_columns(
-            (pl.col("forward_mfe_eod") >= 2.0 * pl.col("forward_mae_eod"))
-            .alias("win_2to1")
+            self.win_condition.expr("forward_mfe_eod", "forward_mae_eod")
+            .alias(self.directional_win_column)
         )
 
         logger.info(
@@ -287,7 +296,7 @@ class MetricsCalculator:
                 continue
 
             total = subset.height
-            wins = subset.filter(pl.col("win_2to1")).height
+            wins = subset.filter(pl.col(self.directional_win_column)).height
             confidence = wins / total if total > 0 else 0.0
             mean_mfe = float(subset["forward_mfe_eod"].mean())
             mean_mae = float(subset["forward_mae_eod"].mean())
@@ -301,7 +310,7 @@ class MetricsCalculator:
                 "total_signals": total,
                 "wins": wins,
                 "losses": total - wins,
-                "confidence_2to1": round(confidence, 4),
+                self.directional_confidence_column: round(confidence, 4),
                 "avg_mfe_eod": round(mean_mfe, 4) if not np.isnan(mean_mfe) else None,
                 "avg_mae_eod": round(mean_mae, 4) if not np.isnan(mean_mae) else None,
                 "median_mfe_eod": round(float(subset["forward_mfe_eod"].median()), 4),
@@ -334,7 +343,7 @@ class MetricsCalculator:
                 row_data["direction"],
                 row_data["total_signals"],
                 row_data["wins"],
-                row_data["confidence_2to1"],
+                row_data[self.directional_confidence_column],
                 ratio_display,
             )
 
@@ -351,7 +360,7 @@ class MetricsCalculator:
             "forward_mfe_eod", "forward_mae_eod",
             "forward_mfe_30", "forward_mae_30",
             "forward_mfe_60", "forward_mae_60",
-            "win_2to1",
+            self.directional_win_column,
         ]
         present = [c for c in cols_to_keep if c in df.columns]
 

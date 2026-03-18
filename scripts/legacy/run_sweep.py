@@ -2,11 +2,14 @@
 """
 Parameter Sweep – Opening Bell Edition
 
+Legacy exploratory script.
+Prefer the canonical research runners and callable evaluation tools for new work.
+
 Run 12 experiments with varying strategy configurations, all restricted
 to the first 35 minutes of the trading day (9:30–10:04 ET).
 
 Usage:
-    python scripts/run_sweep.py
+    python scripts/legacy/run_sweep.py
 """
 
 from __future__ import annotations

@@ -9,6 +9,7 @@ import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags
+from src.oracle.policies import RewardRiskWinCondition
 from src.strategy.factory import build_strategy_by_name
 from src.time_utils import et_date_expr
 
@@ -123,9 +124,10 @@ def run_execution_mapping_for_candidates(
 
         mfe = base["forward_mfe_eod"].to_numpy()
         mae = base["forward_mae_eod"].to_numpy()
-        wins = mfe >= (selected_ratio * mae)
-        p = float(np.mean(wins))
-        base_exp_r = p * selected_ratio - (1.0 - p) - base_cost_r
+        policy = RewardRiskWinCondition(ratio=selected_ratio)
+        wins = policy.flags(mfe, mae)
+        p = policy.confidence(mfe, mae)
+        base_exp_r = policy.expectancy(mfe, mae, base_cost_r)
 
         stress = stress_from_win_flags(
             win_flags=wins,

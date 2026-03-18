@@ -2,6 +2,9 @@
 """
 Simplified Market Impulse – Stage Flip Strategy
 
+Legacy exploratory script.
+Prefer the supported Market Impulse runner or reusable research modules for new work.
+
 Entry: When 1-min impulse stage flips to:
   - "acceleration" (bullish + close ≥ VMA) → enter LONG
   - "deceleration" (bearish + close ≤ VMA) → enter SHORT
