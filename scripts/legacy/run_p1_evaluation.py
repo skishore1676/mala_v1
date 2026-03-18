@@ -15,9 +15,9 @@ Output per experiment:
   - Combined markdown report
 
 Usage:
-  uv run python scripts/run_p1_evaluation.py
-  uv run python scripts/run_p1_evaluation.py --tickers SPY AAPL META IWM QQQ TSLA
-  uv run python scripts/run_p1_evaluation.py --skip-kl --skip-cbk   # only elastic ablation
+  uv run python scripts/legacy/run_p1_evaluation.py
+  uv run python scripts/legacy/run_p1_evaluation.py --tickers SPY AAPL META IWM QQQ TSLA
+  uv run python scripts/legacy/run_p1_evaluation.py --skip-kl --skip-cbk   # only elastic ablation
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import polars as pl
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine

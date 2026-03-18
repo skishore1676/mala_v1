@@ -19,7 +19,8 @@ architecture_decisions:
     library modules, with one canonical orchestrator entrypoint layered on top.
     Current reusable seams include callable research tools, policy-driven reward:risk
     evaluation, and Newton feature-targeted enrichment through composable transforms
-    plus a shared multi-timeframe resampler.
+    plus a shared multi-timeframe resampler. The orchestrator can now invoke
+    stage-safe research tools directly instead of only advertising next actions.
 
 research_agent:
   name: research-experiment-agent
@@ -49,6 +50,7 @@ script_governance:
   canonical_runners:
     - run_research_orchestrator.py
     - run_walk_forward_novel.py
+    - run_targeted_retune.py
     - run_convergence_pipeline.py
     - run_holdout_validation.py
     - run_execution_mapping.py
@@ -56,16 +58,15 @@ script_governance:
   supported_specialized:
     - run_market_impulse.py
   migrate_next:
-    - run_novel_ideas.py
     - run_elastic_grid.py
-    - run_targeted_retune.py
-    - run_p1_evaluation.py
     - run_opening_drive_classifier.py
   archived_legacy:
     - legacy/run_measurement_sensitivity.py
     - legacy/run_sweep.py
     - legacy/run_stage_flip.py
     - legacy/run_jerk_pivot_backtest.py
+    - legacy/run_novel_ideas.py
+    - legacy/run_p1_evaluation.py
   notes: >
     The top-level scripts surface should converge toward a small set of canonical
     research runners. Historical exploratory scripts have been moved under

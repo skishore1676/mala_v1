@@ -26,7 +26,7 @@ from rich.console import Console
 from rich.table import Table
 
 # Ensure src import works
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.chronos.storage import LocalStorage
 from src.config import settings

@@ -63,6 +63,12 @@ Every cycle should end with one of four outcomes:
 - The callable experiment surface in `src/research/tools.py` and strategy-declared `required_features`.
 - The script support policy in `scripts/STATUS.md` so you can distinguish canonical runners from migrate/archive candidates.
 
+Quick examples:
+
+- `RewardRiskWinCondition(ratio=1.5)` for a 1.5:1 win definition.
+- `orchestrator.run_action(ResearchStage.M1_DISCOVERY, "parameter_sweep", ...)` to execute a stage-safe tool.
+- `PhysicsEngine().enrich_for_features(df, strategy.required_features)` when you need only the declared Newton features.
+
 ## Outputs The Agent Must Produce
 
 - A short hypothesis card:

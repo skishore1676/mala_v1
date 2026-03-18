@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -57,6 +58,21 @@ strategies:
     notes: elastic notes
         """.strip(),
         encoding="utf-8",
+    )
+
+
+def _sample_raw_frame() -> pl.DataFrame:
+    timestamps = [datetime(2025, 1, 1) + timedelta(days=i) for i in range(160)]
+    closes = [100.0 + ((i % 12) - 6) * 0.4 for i in range(160)]
+    return pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": closes,
+            "high": [price + 0.5 for price in closes],
+            "low": [price - 0.5 for price in closes],
+            "close": closes,
+            "volume": [1000 + (i % 5) * 100 for i in range(160)],
+        }
     )
 
 
@@ -134,6 +150,54 @@ def test_toolbox_parameter_sweep_and_baselines(tmp_path: Path) -> None:
     comparison = toolbox.baseline_comparison("Elastic Band Reversion")
     assert comparison.summary["baseline_count"] == 1
     assert comparison.artifacts["comparisons"][0]["baseline"] == "Elastic Band z=1.25/w=360+dm"
+
+
+def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    toolbox = ResearchToolbox(state_path)
+    result = toolbox.parameter_sweep(
+        "Elastic Band Reversion",
+        parameter_space={
+            "z_score_threshold": [1.0],
+            "z_score_window": [5],
+            "use_directional_mass": [False],
+        },
+        max_configs=1,
+        tickers=["META"],
+        ticker_frames={"META": _sample_raw_frame()},
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 5, 31),
+        train_months=2,
+        test_months=1,
+        ratios=[1.0],
+        min_signals=1,
+        cost_r=0.05,
+        min_total_signals=1,
+    )
+
+    assert result.summary["ticker_count"] == 1
+    assert "detail" in result.artifacts
+    assert "aggregate" in result.artifacts
+    assert isinstance(result.artifacts["detail"], pl.DataFrame)
+    assert isinstance(result.artifacts["aggregate"], pl.DataFrame)
+
+
+def test_orchestrator_can_run_allowed_action(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    orchestrator = ResearchOrchestrator(state_path)
+    result = orchestrator.run_action(
+        ResearchStage.M1_DISCOVERY,
+        "parameter_sweep",
+        strategy_name="Elastic Band Reversion",
+        max_configs=1,
+    )
+
+    assert result.tool_name == "parameter_sweep"
+    assert result.summary["config_count"] == 1
 
 
 def test_toolbox_convergence_grid_returns_report(tmp_path: Path) -> None:

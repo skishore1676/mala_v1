@@ -3,8 +3,8 @@
 Run novel directional strategy ideas and compare edge metrics.
 
 Usage:
-    python scripts/run_novel_ideas.py
-    python scripts/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
+    python scripts/legacy/run_novel_ideas.py
+    python scripts/legacy/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 # Ensure src is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.chronos.storage import LocalStorage
 from src.config import settings

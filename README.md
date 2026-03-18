@@ -227,7 +227,7 @@ This does:
 Run:
 
 ```bash
-uv run python scripts/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
+uv run python scripts/legacy/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
 ```
 
 This does:
@@ -374,11 +374,24 @@ The stage runners in `scripts/` now increasingly act as wrappers over these reus
 
 The research runners now also use strategy-declared `required_features` to ask Newton only for the needed transforms during walk-forward, holdout, and execution mapping runs.
 
+A canonical execution pattern now exists for agentic research work:
+
+```python
+from src.research import ResearchOrchestrator, ResearchStage
+
+orchestrator = ResearchOrchestrator()
+result = orchestrator.run_action(
+    ResearchStage.M1_DISCOVERY,
+    "parameter_sweep",
+    strategy_name="Elastic Band Reversion",
+)
+```
+
 ## Script Governance
 
 Not every script in `scripts/` should be treated as equally supported.
 
-- Canonical research entrypoints: `run_research_orchestrator.py`, `run_walk_forward_novel.py`, `run_convergence_pipeline.py`, `run_holdout_validation.py`, `run_execution_mapping.py`, and `query_results_db.py`
+- Canonical research entrypoints: `run_research_orchestrator.py`, `run_walk_forward_novel.py`, `run_targeted_retune.py`, `run_convergence_pipeline.py`, `run_holdout_validation.py`, `run_execution_mapping.py`, and `query_results_db.py`
 - Supported specialized runner: `run_market_impulse.py`
 - Historical exploratory runners now live under `scripts/legacy/`.
 - Everything else should be treated as either `migrate_next` or archived legacy unless there is a specific reason to preserve it as-is.

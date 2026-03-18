@@ -16,18 +16,13 @@ from itertools import product
 from pathlib import Path
 import sys
 
-import numpy as np
 import polars as pl
 from rich.console import Console
 from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.chronos.storage import LocalStorage
-from src.newton.engine import PhysicsEngine
-from src.oracle.metrics import MetricsCalculator
-from src.oracle.policies import RewardRiskWinCondition
-from src.strategy.base import required_feature_union
+from src.research import ResearchOrchestrator
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
 from src.strategy.compression_breakout import CompressionBreakoutStrategy
 
@@ -47,60 +42,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _score_group(mfe: np.ndarray, mae: np.ndarray, ratio: float, cost_r: float, n_boot: int, rng: np.random.Generator) -> dict:
-    n = len(mfe)
-    if n == 0:
-        return {"signals": 0, "confidence": None, "exp_r": None, "prob_pos_exp": None}
-
-    policy = RewardRiskWinCondition(ratio=ratio)
-    p = policy.confidence(mfe, mae)
-    exp_r = policy.expectancy(mfe, mae, cost_r)
-
-    p_boot = rng.binomial(n=n, p=p, size=n_boot) / n
-    exp_boot = p_boot * ratio - (1.0 - p_boot) - cost_r
-
-    return {
-        "signals": n,
-        "confidence": round(p, 4),
-        "exp_r": round(exp_r, 4),
-        "prob_pos_exp": round(float(np.mean(exp_boot > 0)), 4),
-    }
-
-
-def _evaluate(df_eval: pl.DataFrame, ratio: float, cost_r: float, n_boot: int, min_signals: int, rng: np.random.Generator) -> dict:
-    base = (
-        df_eval.filter(pl.col("signal"))
-        .drop_nulls(subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"])
-    )
-
-    rows = []
-    for direction in ("combined", "long", "short"):
-        subset = base if direction == "combined" else base.filter(pl.col("signal_direction") == direction)
-        mfe = subset["forward_mfe_eod"].to_numpy() if len(subset) else np.array([])
-        mae = subset["forward_mae_eod"].to_numpy() if len(subset) else np.array([])
-        stats = _score_group(mfe, mae, ratio, cost_r, n_boot, rng)
-        if stats["signals"] >= min_signals:
-            rows.append({"direction": direction, **stats})
-
-    # objective: combined expectancy, then prob positive, then signal count
-    combined = next((r for r in rows if r["direction"] == "combined"), None)
-    if combined is None:
-        return {"rows": rows, "objective": -1e9}
-
-    objective = float(combined["exp_r"]) * 1000 + float(combined["prob_pos_exp"]) * 100 + float(combined["signals"]) / 1000
-    return {"rows": rows, "objective": objective}
-
-
 def main() -> None:
     args = parse_args()
-
-    storage = LocalStorage()
-    physics = PhysicsEngine()
-    metrics = MetricsCalculator()
-    rng = np.random.default_rng(7)
-    needed_features = required_feature_union(
-        [KinematicLadderStrategy(use_volume_filter=False), CompressionBreakoutStrategy(use_volume_filter=False)]
-    )
+    orchestrator = ResearchOrchestrator()
 
     # Param grids
     kinematic_grid = list(product(
@@ -118,7 +62,7 @@ def main() -> None:
         [(9, 40, 15, 30), (9, 50, 15, 20)],
     ))
 
-    rows: list[dict] = []
+    candidates: list[dict] = []
 
     console.rule("[bold cyan]Targeted Retune Sweep (ET-corrected)[/]")
     console.print(f"Tickers={args.tickers} range={args.start}->{args.end} ratio={args.ratio} cost_r={args.cost_r}")
@@ -128,12 +72,6 @@ def main() -> None:
             f"Running {ticker}: {len(kinematic_grid)} kinematic + "
             f"{len(compression_grid)} compression configs"
         )
-        df = storage.load_bars(ticker, args.start, args.end)
-        if df.is_empty():
-            continue
-        df = physics.enrich_for_features(df, needed_features)
-
-        # Kinematic
         for regime_window, accel_window, vol_mult, sess in kinematic_grid:
             sh, sm, eh, em = sess
             strat = KinematicLadderStrategy(
@@ -144,22 +82,19 @@ def main() -> None:
                 session_start=__import__('datetime').time(sh, sm),
                 session_end=__import__('datetime').time(eh, em),
             )
-            df_eval = metrics.add_directional_forward_metrics(strat.generate_signals(df.clone()), snapshot_windows=(30, 60))
-            scored = _evaluate(df_eval, args.ratio, args.cost_r, args.bootstrap_iters, args.min_signals, rng)
-            for r in scored["rows"]:
-                rows.append({
-                    "ticker": ticker,
-                    "strategy": "Kinematic Ladder",
-                    "params": f"rw={regime_window},aw={accel_window},vol={vol_mult},sess={sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
-                    "direction": r["direction"],
-                    "signals": r["signals"],
-                    "confidence": r["confidence"],
-                    "exp_r": r["exp_r"],
-                    "prob_pos_exp": r["prob_pos_exp"],
-                    "objective": scored["objective"],
-                })
+            candidates.append({
+                "strategy": strat,
+                "strategy_name": "Kinematic Ladder",
+                "params_label": f"rw={regime_window},aw={accel_window},vol={vol_mult},sess={sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
+                "metadata": {
+                    "candidate_family": "kinematic_ladder",
+                    "regime_window": regime_window,
+                    "accel_window": accel_window,
+                    "volume_multiplier": vol_mult,
+                    "session": f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
+                },
+            })
 
-        # Compression
         for cw, bl, cf, vol_mult, sess in compression_grid:
             sh, sm, eh, em = sess
             strat = CompressionBreakoutStrategy(
@@ -171,32 +106,36 @@ def main() -> None:
                 session_start=__import__('datetime').time(sh, sm),
                 session_end=__import__('datetime').time(eh, em),
             )
-            df_eval = metrics.add_directional_forward_metrics(strat.generate_signals(df.clone()), snapshot_windows=(30, 60))
-            scored = _evaluate(df_eval, args.ratio, args.cost_r, args.bootstrap_iters, args.min_signals, rng)
-            for r in scored["rows"]:
-                rows.append({
-                    "ticker": ticker,
-                    "strategy": "Compression Expansion Breakout",
-                    "params": f"cw={cw},bl={bl},cf={cf},vol={vol_mult},sess={sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
-                    "direction": r["direction"],
-                    "signals": r["signals"],
-                    "confidence": r["confidence"],
-                    "exp_r": r["exp_r"],
-                    "prob_pos_exp": r["prob_pos_exp"],
-                    "objective": scored["objective"],
-                })
+            candidates.append({
+                "strategy": strat,
+                "strategy_name": "Compression Expansion Breakout",
+                "params_label": f"cw={cw},bl={bl},cf={cf},vol={vol_mult},sess={sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
+                "metadata": {
+                    "candidate_family": "compression_breakout",
+                    "compression_window": cw,
+                    "breakout_lookback": bl,
+                    "compression_factor": cf,
+                    "volume_multiplier": vol_mult,
+                    "session": f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}",
+                },
+            })
 
-    if not rows:
+    result = orchestrator.toolbox().retune_search(
+        candidates=candidates,
+        ratio=args.ratio,
+        cost_r=args.cost_r,
+        bootstrap_iters=args.bootstrap_iters,
+        min_signals=args.min_signals,
+        tickers=args.tickers,
+        start_date=args.start,
+        end_date=args.end,
+    )
+    out = result.artifacts["detail"]
+    ranked = result.artifacts["ranked"]
+
+    if out.is_empty():
         console.print("[red]No rows generated[/]")
         return
-
-    out = pl.DataFrame(rows)
-
-    # ranking on combined direction only
-    ranked = (
-        out.filter(pl.col("direction") == "combined")
-        .sort(["exp_r", "prob_pos_exp", "signals"], descending=[True, True, True])
-    )
 
     table = Table(title="Top Retuned Configs (Combined)", show_lines=True)
     table.add_column("Ticker")

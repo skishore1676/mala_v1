@@ -24,26 +24,17 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime
-from itertools import product
 from pathlib import Path
 import sys
 
-import numpy as np
 import polars as pl
 from rich.console import Console
 from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.chronos.storage import LocalStorage
-from src.newton.engine import PhysicsEngine
-from src.oracle.metrics import MetricsCalculator
-from src.oracle.policies import RewardRiskWinCondition
 from src.oracle.results_db import ResultsDB
-from src.research.stages import build_windows, cost_r_from_bps
-from src.strategy.base import required_feature_union
-from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
-from src.time_utils import et_date_expr
+from src.research import ResearchOrchestrator, ResearchStage
 
 
 console = Console()
@@ -52,9 +43,6 @@ console = Console()
 
 Z_THRESHOLDS = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0]
 Z_WINDOWS    = [60, 120, 180, 240, 360]
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,60 +65,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", default="data/results")
     return p.parse_args()
 
-def eval_direction(
-    df: pl.DataFrame,
-    direction: str,
-    ratio: float,
-    cost_r: float,
-) -> dict:
-    """Evaluate a single direction subset at a given ratio and cost_r."""
-    base = df.filter(pl.col("signal")).drop_nulls(
-        subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"]
-    )
-    if direction != "combined":
-        base = base.filter(pl.col("signal_direction") == direction)
-
-    n = len(base)
-    if n == 0:
-        return {"signals": 0, "confidence": None, "exp_r": None, "avg_mae": None, "avg_entry": None}
-
-    mfe = base["forward_mfe_eod"].to_numpy()
-    mae = base["forward_mae_eod"].to_numpy()
-
-    # avg entry price for relative cost conversion
-    avg_entry = float(base["close"].mean()) if "close" in base.columns else 0.0
-    avg_mae = float(np.mean(mae))
-
-    policy = RewardRiskWinCondition(ratio=ratio)
-    p = policy.confidence(mfe, mae)
-    exp_r = policy.expectancy(mfe, mae, cost_r)
-    return {
-        "signals": n,
-        "confidence": round(p, 4),
-        "exp_r": round(exp_r, 4),
-        "avg_mae": round(avg_mae, 6),
-        "avg_entry": round(avg_entry, 4),
-    }
-
-
-def pick_best_ratio(
-    train_df: pl.DataFrame,
-    direction: str,
-    ratios: list[float],
-    cost_r: float,
-    min_signals: int,
-) -> tuple[float | None, float | None]:
-    """Choose the ratio with highest train expectancy."""
-    best_ratio, best_exp = None, -1e9
-    for ratio in ratios:
-        stats = eval_direction(train_df, direction, ratio, cost_r)
-        if stats["signals"] < min_signals or stats["exp_r"] is None:
-            continue
-        if float(stats["exp_r"]) > best_exp:
-            best_exp = float(stats["exp_r"])
-            best_ratio = ratio
-    return best_ratio, (best_exp if best_ratio is not None else None)
-
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -138,12 +72,6 @@ def pick_best_ratio(
 def main() -> None:
     args = parse_args()
     ratios = [float(x.strip()) for x in args.ratios.split(",") if x.strip()]
-    windows = build_windows(args.start, args.end, args.train_months, args.test_months)
-
-    if not windows:
-        console.print("[red]No walk-forward windows for the given date range.[/]")
-        return
-
     use_relative = args.cost_r is None
     cost_bps = args.cost_bps if use_relative else None
     fixed_cost_r = args.cost_r if not use_relative else None
@@ -158,126 +86,33 @@ def main() -> None:
         f"{len(Z_THRESHOLDS) * len(Z_WINDOWS)} param combos per ticker"
     )
 
-    storage = LocalStorage()
-    physics  = PhysicsEngine()
-    metrics  = MetricsCalculator()
-    needed_features = required_feature_union([ElasticBandReversionStrategy()])
+    orchestrator = ResearchOrchestrator()
+    sweep = orchestrator.run_action(
+        ResearchStage.M1_DISCOVERY,
+        "parameter_sweep",
+        strategy_name="Elastic Band Reversion",
+        parameter_space={
+            "z_score_threshold": Z_THRESHOLDS,
+            "z_score_window": Z_WINDOWS,
+        },
+        max_configs=len(Z_THRESHOLDS) * len(Z_WINDOWS),
+        tickers=args.tickers,
+        start_date=args.start,
+        end_date=args.end,
+        train_months=args.train_months,
+        test_months=args.test_months,
+        ratios=ratios,
+        min_signals=args.min_signals,
+        cost_r=fixed_cost_r,
+        cost_bps=cost_bps,
+        min_total_signals=args.min_oos_signals_total,
+    )
+    detail_df = sweep.artifacts["detail"]
+    heatmap = sweep.artifacts["aggregate"]
 
-    grid_params = list(product(Z_THRESHOLDS, Z_WINDOWS))
-    all_detail_rows: list[dict] = []
-
-    for ticker in args.tickers:
-        console.rule(f"[cyan]{ticker}[/]")
-        df_raw = storage.load_bars(ticker, args.start, args.end)
-        if df_raw.is_empty():
-            console.print(f"[yellow]  No cached data for {ticker}, skipping.[/]")
-            continue
-        df_raw = physics.enrich_for_features(df_raw, needed_features)
-
-        for (z_thresh, z_win) in grid_params:
-            label = f"z={z_thresh:.2f}/w={z_win}"
-            strat = ElasticBandReversionStrategy(
-                z_score_threshold=z_thresh,
-                z_score_window=z_win,
-            )
-
-            df_sig = strat.generate_signals(df_raw.clone())
-            df_eval_all = metrics.add_directional_forward_metrics(
-                df_sig, snapshot_windows=(30, 60)
-            )
-
-            for w_idx, w in enumerate(windows, start=1):
-                train_df = df_eval_all.filter(
-                    (et_date_expr("timestamp") >= w.train_start)
-                    & (et_date_expr("timestamp") <= w.train_end)
-                )
-                test_df = df_eval_all.filter(
-                    (et_date_expr("timestamp") >= w.test_start)
-                    & (et_date_expr("timestamp") <= w.test_end)
-                )
-
-                for direction in ("combined", "long", "short"):
-                    # Determine cost_r for this tick/direction/window
-                    if use_relative:
-                        # Estimate avg_mae and avg_entry from test set for realistic cost
-                        base_for_cost = test_df.filter(pl.col("signal")).drop_nulls(
-                            subset=["forward_mae_eod", "signal_direction"]
-                        )
-                        if direction != "combined":
-                            base_for_cost = base_for_cost.filter(
-                                pl.col("signal_direction") == direction
-                            )
-                        if len(base_for_cost) > 0 and "close" in base_for_cost.columns:
-                            avg_mae_d = float(base_for_cost["forward_mae_eod"].mean() or 0)
-                            avg_entry_d = float(base_for_cost["close"].mean() or 0)
-                        else:
-                            avg_mae_d, avg_entry_d = 0.0, 0.0
-                        effective_cost_r = cost_r_from_bps(cost_bps, avg_mae_d, avg_entry_d)
-                    else:
-                        effective_cost_r = fixed_cost_r
-                        avg_mae_d, avg_entry_d = None, None
-
-                    # Pick ratio on train
-                    best_ratio, best_train_exp = pick_best_ratio(
-                        train_df, direction, ratios, effective_cost_r, args.min_signals
-                    )
-                    if best_ratio is None:
-                        continue
-
-                    # Evaluate on OOS
-                    test_stats = eval_direction(test_df, direction, best_ratio, effective_cost_r)
-                    if test_stats["signals"] < args.min_signals or test_stats["exp_r"] is None:
-                        continue
-
-                    all_detail_rows.append({
-                        "ticker": ticker,
-                        "z_score_threshold": z_thresh,
-                        "z_score_window": z_win,
-                        "direction": direction,
-                        "window_idx": w_idx,
-                        "train_start": w.train_start.isoformat(),
-                        "train_end": w.train_end.isoformat(),
-                        "test_start": w.test_start.isoformat(),
-                        "test_end": w.test_end.isoformat(),
-                        "selected_ratio": best_ratio,
-                        "train_exp_r": round(float(best_train_exp), 4),
-                        "test_signals": int(test_stats["signals"]),
-                        "test_confidence": test_stats["confidence"],
-                        "test_exp_r": test_stats["exp_r"],
-                        "effective_cost_r": round(effective_cost_r, 5),
-                        "avg_mae_dollars": round(avg_mae_d, 5) if avg_mae_d is not None else None,
-                        "avg_entry_price": round(avg_entry_d, 4) if avg_entry_d is not None else None,
-                    })
-
-        console.print(f"  {ticker}: {len([r for r in all_detail_rows if r['ticker'] == ticker])} detail rows generated")
-
-    if not all_detail_rows:
+    if detail_df.is_empty() or heatmap.is_empty():
         console.print("[red]No rows generated. Check that tickers have cached data.[/]")
         return
-
-    detail_df = pl.DataFrame(all_detail_rows)
-
-    # ── Aggregate into heatmap ───────────────────────────────────────────────
-    heatmap = (
-        detail_df
-        .group_by(["ticker", "z_score_threshold", "z_score_window", "direction"])
-        .agg([
-            pl.len().alias("oos_windows"),
-            pl.col("test_signals").sum().alias("total_oos_signals"),
-            pl.col("test_exp_r").mean().alias("avg_oos_exp_r"),
-            pl.col("test_exp_r").median().alias("med_oos_exp_r"),
-            (pl.col("test_exp_r") > 0).mean().alias("pct_positive_windows"),
-            pl.col("test_confidence").mean().alias("avg_confidence"),
-            pl.col("effective_cost_r").mean().alias("avg_effective_cost_r"),
-        ])
-        .with_columns(
-            pl.when(pl.col("total_oos_signals") >= args.min_oos_signals_total)
-            .then(pl.lit("valid"))
-            .otherwise(pl.lit("low_n"))
-            .alias("signal_quality")
-        )
-        .sort(["ticker", "direction", "avg_oos_exp_r"], descending=[False, False, True])
-    )
 
     # ── Print heatmap table (combined direction, best configs per ticker) ────
     console.rule("[bold green]Grid Search Results — Combined Direction[/]")

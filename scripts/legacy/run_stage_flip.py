@@ -26,7 +26,7 @@ from datetime import date, time as dt_time, timedelta
 from pathlib import Path
 from typing import List
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import numpy as np
 import polars as pl

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from src.research.models import OrchestrationAction, ResearchStage, StrategyCatalogEntry
 from src.research.registry import ResearchRegistry
-from src.research.tools import ResearchToolbox
+from src.research.tools import ResearchToolResult, ResearchToolbox
 
 
 _STAGE_ACTIONS: dict[ResearchStage, list[tuple[str, str, str]]] = {
@@ -59,3 +60,9 @@ class ResearchOrchestrator:
 
     def toolbox(self) -> ResearchToolbox:
         return ResearchToolbox(self._state_path)
+
+    def run_action(self, stage: ResearchStage, tool_name: str, /, **kwargs: Any) -> ResearchToolResult:
+        allowed = {action.tool_name for action in self.next_actions(stage)}
+        if tool_name not in allowed:
+            raise ValueError(f"Tool {tool_name!r} is not allowed for stage {stage.value}")
+        return self.toolbox().invoke(tool_name, **kwargs)
