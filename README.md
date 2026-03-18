@@ -38,6 +38,23 @@ The engine answers three questions:
 | **Strategy** | `src/strategy/`   | Configurable strategy agents                  |
 | **Oracle**   | `src/oracle/`     | MFE/MAE metrics and reporting                 |
 
+### Refactor Direction
+
+The current architectural pressure point is not `Chronos`; it is orchestration and duplicated research logic across the growing `run_*.py` surface area.
+
+- `Chronos` remains the stable data foundation for now.
+- `Newton` is moving toward composable feature transforms plus centralized multi-timeframe handling instead of letting MTF logic spread into scripts.
+- `Oracle` is moving toward a cleaner split between evaluation policy, simulation logic, and persistence/reporting.
+- `Strategy` is moving toward richer metadata for orchestration, including required features, parameter space, and evaluation mode.
+
+The target workflow is a **hybrid research architecture**:
+
+- M1-M5 stage gates remain deterministic and explicitly defined.
+- An AI research controller may run bounded experiments inside those rules.
+- The AI may not redefine gates, silently promote a strategy, or bypass failed stages.
+- Existing `run_*.py` scripts should gradually become internal runners/adapters over reusable library modules.
+- A canonical orchestrator entrypoint should sit on top of those runners once the refactor lands.
+
 ### Timezone And Session Handling
 
 - Raw bars are stored with UTC timestamps.
@@ -229,6 +246,14 @@ Run:
 uv run python scripts/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
 ```
 
+Registry-backed variants now supported:
+
+```bash
+uv run python scripts/run_walk_forward_novel.py --strategy-source tracked
+uv run python scripts/run_walk_forward_novel.py --strategy-source validation
+uv run python scripts/run_walk_forward_novel.py --strategy-source tracked --strategy-names "Elastic Band z=1.25/w=360+dm"
+```
+
 This does:
 
 1. Splits history into rolling train/test windows.
@@ -242,6 +267,13 @@ Run:
 
 ```bash
 uv run python scripts/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
+```
+
+Focused convergence runs now support the same strategy-selection surface:
+
+```bash
+uv run python scripts/run_convergence_pipeline.py --strategy-source validation
+uv run python scripts/run_convergence_pipeline.py --strategy-source tracked --strategy-names "Jerk-Pivot Momentum (tight)"
 ```
 
 This does:
@@ -280,6 +312,55 @@ This does:
 2. Maps each to practical option structures (DTE, delta bands, entry/exit risk rules).
 3. Runs Monte Carlo execution stress with random fill/cost perturbations.
 4. Writes CSV/Markdown artifacts and stores rows in `results.db`.
+
+## Refactor Validation Set
+
+The refactor is not considered successful unless the strategies below can still be instantiated, run, and produce comparable outputs through the new orchestration path.
+
+- `Elastic Band Reversion`: primary regression baseline and strongest current research candidate.
+- `Opening Drive Classifier`: validates session-aware logic, opening-window rules, and directional output.
+- `Kinematic Ladder`: validates the momentum/regime path and ensures weaker candidates still move correctly through the workflow.
+- `Jerk-Pivot Momentum`: validates an alternate directional feature dependency built around VPOC proximity and jerk inflection.
+
+Minimum acceptance for the validation set:
+
+- Each strategy can be constructed from the new orchestration layer without hand-editing scripts.
+- Each strategy can generate signals on enriched data with its expected feature dependencies resolved automatically.
+- Each strategy can complete at least the walk-forward evaluation stage through the new orchestration path.
+- Result artifacts remain comparable enough to prior runs that a future agent can detect regressions instead of rediscovering baseline behavior.
+
+## Refactor Roadmap
+
+This repo is moving toward a hybrid agentic research workflow with the following boundaries:
+
+- Deterministic stage governance: M1-M5 gates stay rule-based and reproducible.
+- Bounded AI authority: the agent can propose and run experiments within declared budgets and parameter spaces.
+- Dual-layer entrypoint model: keep current scripts as internal building blocks while adding one canonical orchestrator above them.
+- Reusable library-first internals: shared research logic should live in modules, not be duplicated across runner scripts.
+
+## Research Agent Contract
+
+The repo now carries a dedicated research-agent skill contract at `skills/research-experiment-agent/SKILL.md`.
+
+That contract defines:
+
+- the agent persona: skeptical, evidence-first, and conservative about promotion,
+- the objective: shepherd raw ideas to `promote`, `retune`, `gather_more_evidence`, or `kill`,
+- the allowed tasks: bounded experiments, result analysis, and stage-appropriate recommendations,
+- the forbidden actions: changing gates, bypassing holdout discipline, or silently rewriting the research rules.
+
+Future agentic workflow work should treat that file as the canonical operating brief for the experiment-running agent.
+
+The first reusable orchestration pieces now live in:
+
+- `src/research/registry.py`: repo-memory-backed strategy discovery and instantiation,
+- `src/research/stages/walk_forward.py`: reusable walk-forward math and aggregation,
+- `src/research/stages/convergence.py`: reusable convergence gate logic,
+- `src/research/stages/holdout.py`: reusable holdout candidate selection, ratio fitting, and pass/fail summarization,
+- `src/research/stages/execution.py`: reusable execution mapping and Monte Carlo stage logic,
+- `scripts/run_research_orchestrator.py`: a thin CLI for inspecting tracked strategies, validation fixtures, and next allowed actions.
+
+The stage runners in `scripts/` now increasingly act as wrappers over these reusable modules instead of owning the research logic directly.
 
 ## How Success Is Measured
 

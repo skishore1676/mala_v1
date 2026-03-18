@@ -16,7 +16,6 @@ from datetime import date, datetime
 from pathlib import Path
 import sys
 
-import numpy as np
 import polars as pl
 from rich.console import Console
 from rich.table import Table
@@ -27,8 +26,13 @@ from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.results_db import ResultsDB
-from src.strategy.factory import build_strategy_by_name
-from src.time_utils import et_date_expr
+from src.research.stages import (
+    latest_csv,
+    parse_floats,
+    promoted_candidates_from_gate_report,
+    run_holdout_validation_for_candidates,
+    summarize_holdout,
+)
 
 
 console = Console()
@@ -47,73 +51,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-holdout-signals", type=int, default=500)
     parser.add_argument("--out-dir", default="data/results")
     return parser.parse_args()
-
-
-def parse_floats(csv_like: str) -> list[float]:
-    values = [float(x.strip()) for x in csv_like.split(",") if x.strip()]
-    if not values:
-        raise ValueError(f"Could not parse numeric values from: {csv_like}")
-    return values
-
-
-def latest_gate_report(out_dir: Path) -> Path:
-    candidates = sorted(out_dir.glob("convergence_gate_report_*.csv"))
-    # filter out "relaxed" reports
-    strict = [c for c in candidates if "relaxed" not in c.name]
-    if not strict:
-        raise FileNotFoundError("No strict convergence_gate_report_*.csv found in data/results")
-    return strict[-1]
-
-
-def cost_r_from_bps(cost_bps: float, avg_mae_dollars: float, avg_entry_price: float) -> float:
-    """Convert basis-point transaction cost to R units: cost_dollars / avg_mae."""
-    if avg_mae_dollars is None or avg_mae_dollars <= 0 or avg_entry_price <= 0:
-        return 0.05
-    return (avg_entry_price * cost_bps / 10_000.0) / avg_mae_dollars
-
-
-def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_bps: float) -> dict:
-    base = df_eval.filter(pl.col("signal")).drop_nulls(subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"])
-    if direction != "combined":
-        base = base.filter(pl.col("signal_direction") == direction)
-
-    if base.is_empty():
-        return {"signals": 0, "confidence": None, "exp_r": None}
-
-    mfe = base["forward_mfe_eod"].to_numpy()
-    mae = base["forward_mae_eod"].to_numpy()
-    wins = mfe >= (ratio * mae)
-    p = float(np.mean(wins))
-    
-    avg_price = base["close"].mean()
-    avg_mae_dollars = float(np.mean(mae))
-    cost_r = cost_r_from_bps(cost_bps, avg_mae_dollars, avg_price)
-    
-    exp_r = p * ratio - (1.0 - p) - cost_r
-    return {"signals": int(len(mfe)), "confidence": round(p, 4), "exp_r": round(exp_r, 4)}
-
-
-def choose_ratio(
-    calib_df: pl.DataFrame,
-    direction: str,
-    ratios: list[float],
-    cost_bps: float,
-    min_calib_signals: int,
-) -> tuple[float | None, dict]:
-    best_ratio = None
-    best_exp = -1e9
-    best_stats: dict = {"signals": 0, "confidence": None, "exp_r": None}
-    for ratio in ratios:
-        stats = eval_direction(calib_df, direction, ratio, cost_bps)
-        if stats["exp_r"] is None or int(stats["signals"]) < min_calib_signals:
-            continue
-        exp_r = float(stats["exp_r"])
-        if exp_r > best_exp:
-            best_exp = exp_r
-            best_ratio = ratio
-            best_stats = stats
-    return best_ratio, best_stats
-
 
 def print_summary_table(df: pl.DataFrame) -> None:
     table = Table(title="M5 Holdout Summary", show_lines=True)
@@ -145,9 +82,13 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    gate_report_path = Path(args.gate_report) if args.gate_report else latest_gate_report(out_dir)
+    gate_report_path = Path(args.gate_report) if args.gate_report else latest_csv(
+        out_dir,
+        "convergence_gate_report",
+        exclude_substrings=("relaxed",),
+    )
     gate_df = pl.read_csv(gate_report_path)
-    promoted = gate_df.filter(pl.col("decision") == "promote_to_holdout").select(["ticker", "strategy", "direction"])
+    promoted = promoted_candidates_from_gate_report(gate_df)
 
     if promoted.is_empty():
         console.print("[red]No promoted candidates found in gate report.[/]")
@@ -174,103 +115,26 @@ def main() -> None:
             continue
         ticker_frames[ticker] = physics.enrich(raw)
 
-    detail_rows: list[dict] = []
-
-    for c in promoted.iter_rows(named=True):
-        ticker = c["ticker"]
-        strategy_name = c["strategy"]
-        direction = c["direction"]
-        if ticker not in ticker_frames:
-            continue
-
-        strategy = build_strategy_by_name(strategy_name)
-        df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
-        df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
-
-        calib_df = df_eval.filter(
-            (et_date_expr("timestamp") >= args.start)
-            & (et_date_expr("timestamp") <= args.calibration_end)
-        )
-        holdout_df = df_eval.filter(
-            (et_date_expr("timestamp") >= args.holdout_start)
-            & (et_date_expr("timestamp") <= args.holdout_end)
-        )
-
-        for cost_bps in costs:
-            selected_ratio, calib_stats = choose_ratio(
-                calib_df=calib_df,
-                direction=direction,
-                ratios=ratios,
-                cost_bps=cost_bps,
-                min_calib_signals=args.min_calibration_signals,
-            )
-            if selected_ratio is None:
-                detail_rows.append({
-                    "ticker": ticker,
-                    "strategy": strategy_name,
-                    "direction": direction,
-                    "cost_bps": cost_bps,
-                    "selected_ratio": None,
-                    "calib_signals": 0,
-                    "calib_exp_r": None,
-                    "holdout_signals": 0,
-                    "holdout_confidence": None,
-                    "holdout_exp_r": None,
-                    "passes_cost_gate": False,
-                })
-                continue
-
-            holdout_stats = eval_direction(holdout_df, direction, selected_ratio, cost_bps)
-            holdout_signals = int(holdout_stats["signals"])
-            holdout_exp = holdout_stats["exp_r"]
-            passes_cost = (
-                holdout_exp is not None
-                and holdout_signals >= args.min_holdout_signals
-                and float(holdout_exp) >= 0.0
-            )
-            detail_rows.append({
-                "ticker": ticker,
-                "strategy": strategy_name,
-                "direction": direction,
-                "cost_bps": cost_bps,
-                "selected_ratio": selected_ratio,
-                "calib_signals": int(calib_stats["signals"]),
-                "calib_exp_r": calib_stats["exp_r"],
-                "holdout_signals": holdout_signals,
-                "holdout_confidence": holdout_stats["confidence"],
-                "holdout_exp_r": holdout_exp,
-                "passes_cost_gate": passes_cost,
-            })
+    detail_rows = run_holdout_validation_for_candidates(
+        promoted=promoted,
+        ticker_frames=ticker_frames,
+        metrics=metrics,
+        start_date=args.start,
+        calibration_end=args.calibration_end,
+        holdout_start=args.holdout_start,
+        holdout_end=args.holdout_end,
+        ratios=ratios,
+        costs=costs,
+        min_calibration_signals=args.min_calibration_signals,
+        min_holdout_signals=args.min_holdout_signals,
+    )
 
     if not detail_rows:
         console.print("[red]No holdout rows generated.[/]")
         return
 
     detail_df = pl.DataFrame(detail_rows)
-    cost_count = len(costs)
-    summary_df = (
-        detail_df.group_by(["ticker", "strategy", "direction"])
-        .agg([
-            pl.len().alias("observed_cost_points"),
-            pl.col("holdout_signals").min().alias("min_holdout_signals"),
-            pl.col("holdout_exp_r").min().alias("min_holdout_exp_r"),
-            pl.col("holdout_exp_r").mean().alias("mean_holdout_exp_r"),
-            pl.col("passes_cost_gate").all().alias("passes_all_cost_gates"),
-        ])
-        .with_columns([
-            (
-                (pl.col("observed_cost_points") == cost_count)
-                & pl.col("passes_all_cost_gates")
-            ).alias("passes_holdout")
-        ])
-        .with_columns([
-            pl.when(pl.col("passes_holdout"))
-            .then(pl.lit("promote_to_execution_mapping"))
-            .otherwise(pl.lit("fail_holdout_or_need_rework"))
-            .alias("decision")
-        ])
-        .sort(["passes_holdout", "min_holdout_exp_r"], descending=[True, True])
-    )
+    summary_df = summarize_holdout(detail_df, cost_count=len(costs))
 
     print_summary_table(summary_df)
 

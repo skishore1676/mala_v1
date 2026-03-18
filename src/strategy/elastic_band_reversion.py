@@ -8,6 +8,8 @@ Mean-reversion hypothesis:
 
 from __future__ import annotations
 
+from typing import Any
+
 import polars as pl
 from loguru import logger
 
@@ -32,15 +34,34 @@ class ElasticBandReversionStrategy(BaseStrategy):
         dm = "+dm" if self.use_directional_mass else "-dm"
         return f"Elastic Band z={self.z_score_threshold}/w={self.z_score_window}{dm}"
 
-    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        required = {
-            "close",
-            "vpoc_4h",
-            "velocity_1m",
-            "jerk_1m",
-        }
+    @property
+    def required_features(self) -> set[str]:
+        required = {"close", "vpoc_4h", "velocity_1m", "jerk_1m"}
         if self.use_directional_mass:
             required.add("directional_mass")
+        return required
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "z_score_threshold": [1.0, 1.25, 1.75, 2.0, 2.5, 3.0],
+            "z_score_window": [120, 240, 360],
+            "use_directional_mass": [True, False],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "z_score_threshold": self.z_score_threshold,
+            "z_score_window": self.z_score_window,
+            "use_directional_mass": self.use_directional_mass,
+        }
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")

@@ -27,6 +27,7 @@ Entry Logic:
 from __future__ import annotations
 
 from datetime import time
+from typing import Any
 
 import polars as pl
 from loguru import logger
@@ -74,8 +75,9 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             f"/jl={self.jerk_lookback}"
         )
 
-    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        required = {
+    @property
+    def required_features(self) -> set[str]:
+        return {
             "timestamp",
             "close",
             "velocity_1m",
@@ -85,6 +87,35 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             "volume",
             f"volume_ma_{self.volume_ma_period}",
         }
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "vpoc_proximity_pct": [0.003, 0.005],
+            "jerk_lookback": [10, 20],
+            "volume_multiplier": [1.0, 1.1],
+            "use_volume_filter": [True, False],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "vpoc_proximity_pct": self.vpoc_proximity_pct,
+            "jerk_lookback": self.jerk_lookback,
+            "volume_multiplier": self.volume_multiplier,
+            "volume_ma_period": self.volume_ma_period,
+            "use_volume_filter": self.use_volume_filter,
+            "use_time_filter": self.use_time_filter,
+            "session_start": self.session_start.isoformat(timespec="minutes"),
+            "session_end": self.session_end.isoformat(timespec="minutes"),
+            "strategy_label": self._strategy_label,
+        }
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")

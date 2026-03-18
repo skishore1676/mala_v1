@@ -9,6 +9,7 @@ Hypothesis:
 from __future__ import annotations
 
 from datetime import time
+from typing import Any
 
 import polars as pl
 from loguru import logger
@@ -47,8 +48,9 @@ class CompressionBreakoutStrategy(BaseStrategy):
     def name(self) -> str:
         return "Compression Expansion Breakout"
 
-    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        required = {
+    @property
+    def required_features(self) -> set[str]:
+        return {
             "timestamp",
             "close",
             "high",
@@ -59,6 +61,35 @@ class CompressionBreakoutStrategy(BaseStrategy):
             "volume",
             f"volume_ma_{self.volume_ma_period}",
         }
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "compression_window": [15, 20, 30],
+            "breakout_lookback": [15, 20],
+            "compression_factor": [0.7, 0.8, 0.9],
+            "use_volume_filter": [True, False],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "compression_window": self.compression_window,
+            "breakout_lookback": self.breakout_lookback,
+            "compression_factor": self.compression_factor,
+            "volume_ma_period": self.volume_ma_period,
+            "volume_multiplier": self.volume_multiplier,
+            "use_time_filter": self.use_time_filter,
+            "use_volume_filter": self.use_volume_filter,
+            "session_start": self.session_start.isoformat(timespec="minutes"),
+            "session_end": self.session_end.isoformat(timespec="minutes"),
+        }
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")

@@ -7,6 +7,8 @@ Routes entries to different sub-strategies based on market regime:
 
 from __future__ import annotations
 
+from typing import Any
+
 import polars as pl
 from loguru import logger
 
@@ -52,6 +54,37 @@ class RegimeRouterStrategy(BaseStrategy):
     @property
     def name(self) -> str:
         return "Regime Router (Kinematic + Compression)"
+
+    @property
+    def required_features(self) -> set[str]:
+        return {"timestamp", "close", "velocity_1m"} | self.kinematic.required_features | self.compression.required_features
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "vol_short_window": [20],
+            "vol_long_window": [60],
+            "trend_vel_window": [30],
+            "trend_vol_ratio": [1.0],
+            "compression_vol_ratio": [0.9],
+            "trend_velocity_floor": [0.015],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "vol_short_window": self.vol_short_window,
+            "vol_long_window": self.vol_long_window,
+            "trend_vel_window": self.trend_vel_window,
+            "trend_vol_ratio": self.trend_vol_ratio,
+            "compression_vol_ratio": self.compression_vol_ratio,
+            "trend_velocity_floor": self.trend_velocity_floor,
+            "kinematic": self.kinematic.strategy_config(),
+            "compression": self.compression.strategy_config(),
+        }
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = {"close", "velocity_1m", "timestamp"}

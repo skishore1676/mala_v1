@@ -9,6 +9,7 @@ Multi-timeframe-inspired momentum strategy:
 from __future__ import annotations
 
 from datetime import time
+from typing import Any
 
 import polars as pl
 from loguru import logger
@@ -46,8 +47,9 @@ class KinematicLadderStrategy(BaseStrategy):
         vol = "+vol" if self.use_volume_filter else "-vol"
         return f"Kinematic Ladder rw={self.regime_window}/aw={self.accel_window}{vol}"
 
-    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        required = {
+    @property
+    def required_features(self) -> set[str]:
+        return {
             "timestamp",
             "close",
             "ema_4",
@@ -59,6 +61,34 @@ class KinematicLadderStrategy(BaseStrategy):
             "volume",
             f"volume_ma_{self.volume_ma_period}",
         }
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "regime_window": [20, 30, 45],
+            "accel_window": [8, 12, 20],
+            "use_volume_filter": [True, False],
+            "volume_multiplier": [1.0, 1.05, 1.1, 1.2],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "regime_window": self.regime_window,
+            "accel_window": self.accel_window,
+            "volume_ma_period": self.volume_ma_period,
+            "volume_multiplier": self.volume_multiplier,
+            "use_time_filter": self.use_time_filter,
+            "use_volume_filter": self.use_volume_filter,
+            "session_start": self.session_start.isoformat(timespec="minutes"),
+            "session_end": self.session_end.isoformat(timespec="minutes"),
+        }
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")

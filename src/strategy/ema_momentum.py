@@ -12,7 +12,7 @@ All three gates must be TRUE simultaneously for a signal.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import polars as pl
 from loguru import logger
@@ -37,6 +37,29 @@ class EMAMomentumStrategy(BaseStrategy):
         periods_str = "/".join(str(p) for p in self.ema_periods)
         return f"EMA Momentum ({periods_str})"
 
+    @property
+    def required_features(self) -> set[str]:
+        ema_cols = {f"ema_{p}" for p in self.ema_periods}
+        return ema_cols | {
+            "close",
+            "vpoc_4h",
+            "volume",
+            f"volume_ma_{self.volume_ma_period}",
+        }
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "ema_periods": [list(settings.ema_periods)],
+            "volume_ma_period": [self.volume_ma_period],
+        }
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "ema_periods": list(self.ema_periods),
+            "volume_ma_period": self.volume_ma_period,
+        }
+
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Apply the three logic gates and add a 'signal' column.
@@ -51,7 +74,7 @@ class EMAMomentumStrategy(BaseStrategy):
         ema_cols = [f"ema_{p}" for p in self.ema_periods]
         vol_ma_col = f"volume_ma_{self.volume_ma_period}"
 
-        required = set(ema_cols) | {"vpoc_4h", "volume", vol_ma_col, "close"}
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(

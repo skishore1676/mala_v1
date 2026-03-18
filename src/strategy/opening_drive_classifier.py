@@ -9,6 +9,7 @@ Idea:
 from __future__ import annotations
 
 from datetime import time, timedelta, datetime
+from typing import Any
 
 import polars as pl
 from loguru import logger
@@ -60,7 +61,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
     def name(self) -> str:
         return self.strategy_label or "Opening Drive Classifier"
 
-    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+    @property
+    def required_features(self) -> set[str]:
         required = {
             "timestamp",
             "open",
@@ -73,6 +75,42 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         }
         if self.require_directional_mass:
             required.add("directional_mass")
+        return required
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "opening_window_minutes": [20, 25, 30],
+            "entry_start_offset_minutes": [20, 25, 30],
+            "entry_end_offset_minutes": [90, 120],
+            "min_drive_return_pct": [0.0015, 0.0020],
+            "breakout_buffer_pct": [0.0, 0.0005],
+            "volume_multiplier": [1.2, 1.4],
+        }
+
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "market_open": self.market_open.isoformat(timespec="minutes"),
+            "opening_window_minutes": self.opening_window_minutes,
+            "entry_start_offset_minutes": self.entry_start_offset_minutes,
+            "entry_end_offset_minutes": self.entry_end_offset_minutes,
+            "min_drive_return_pct": self.min_drive_return_pct,
+            "breakout_buffer_pct": self.breakout_buffer_pct,
+            "volume_multiplier": self.volume_multiplier,
+            "require_directional_mass": self.require_directional_mass,
+            "allow_long": self.allow_long,
+            "allow_short": self.allow_short,
+            "enable_continue": self.enable_continue,
+            "enable_fail": self.enable_fail,
+            "strategy_label": self.strategy_label,
+        }
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        required = self.required_features
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")

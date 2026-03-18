@@ -26,6 +26,7 @@ from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.oracle.results_db import ResultsDB
+from src.research.stages import build_gate_report, cost_tag, parse_costs
 
 
 console = Console()
@@ -42,6 +43,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-months", type=int, default=3)
     parser.add_argument("--ratios", default="1.0,1.25,1.5,2.0")
     parser.add_argument("--walkforward-min-signals", type=int, default=20)
+    parser.add_argument(
+        "--strategy-source",
+        default="legacy",
+        choices=["legacy", "tracked", "validation"],
+        help="Pass strategy selection through to the walk-forward stage.",
+    )
+    parser.add_argument(
+        "--strategy-names",
+        nargs="+",
+        default=None,
+        help="Optional subset of strategy display names to run through convergence.",
+    )
     # Friction mode: use --cost-bps for relative (ticker-aware) friction.
     # --cost-grid is used only in legacy fixed-cost mode.
     parser.add_argument("--cost-grid", default=None,
@@ -59,19 +72,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-n", type=int, default=15)
     parser.add_argument("--out-dir", default="data/results")
     return parser.parse_args()
-
-
-def parse_costs(cost_grid: str) -> list[float]:
-    costs = [float(x.strip()) for x in cost_grid.split(",") if x.strip()]
-    if not costs:
-        raise ValueError("No valid values parsed from --cost-grid")
-    return costs
-
-
-def cost_tag(cost_r: float) -> str:
-    # 0.05 -> "cost050", 0.12 -> "cost120"
-    return f"cost{int(round(cost_r * 1000)):03d}"
-
 
 def run_walkforward_fixed(args: argparse.Namespace, cost_r: float) -> Path:
     """Run walk-forward with a fixed cost_r (legacy grid mode)."""
@@ -95,9 +95,13 @@ def run_walkforward_fixed(args: argparse.Namespace, cost_r: float) -> Path:
         str(cost_r),
         "--min-signals",
         str(args.walkforward_min_signals),
+        "--strategy-source",
+        args.strategy_source,
         "--tag",
         tag,
     ]
+    if args.strategy_names:
+        cmd.extend(["--strategy-names", *args.strategy_names])
     console.print(f"[cyan]Running walk-forward (fixed) for cost_r={cost_r:.3f} ({tag})[/]")
     subprocess.run(cmd, check=True)
 
@@ -131,9 +135,13 @@ def run_walkforward_relative(args: argparse.Namespace, cost_bps: float) -> Path:
         str(cost_bps),
         "--min-signals",
         str(args.walkforward_min_signals),
+        "--strategy-source",
+        args.strategy_source,
         "--tag",
         tag,
     ]
+    if args.strategy_names:
+        cmd.extend(["--strategy-names", *args.strategy_names])
     console.print(f"[cyan]Running walk-forward (relative) for cost_bps={cost_bps} ({tag})[/]")
     subprocess.run(cmd, check=True)
 
@@ -143,58 +151,6 @@ def run_walkforward_relative(args: argparse.Namespace, cost_bps: float) -> Path:
     if not summary_path.exists():
         raise FileNotFoundError(f"Expected summary not found: {summary_path}")
     return summary_path
-
-
-def build_gate_report(
-    combined: pl.DataFrame,
-    cost_count: int,
-    args: argparse.Namespace,
-) -> pl.DataFrame:
-    report = (
-        combined.group_by(["ticker", "strategy", "direction"])
-        .agg([
-            pl.len().alias("observed_cost_points"),
-            pl.col("oos_windows").min().alias("min_oos_windows"),
-            pl.col("oos_signals").min().alias("min_oos_signals"),
-            pl.col("avg_test_exp_r").min().alias("min_avg_test_exp_r"),
-            pl.col("avg_test_exp_r").mean().alias("mean_avg_test_exp_r"),
-            pl.col("pct_positive_oos_windows").min().alias("min_pct_positive_oos_windows"),
-            pl.col("pct_positive_oos_windows").mean().alias("mean_pct_positive_oos_windows"),
-            pl.col("avg_test_confidence").mean().alias("mean_test_confidence"),
-        ])
-        .with_columns([
-            (pl.col("observed_cost_points") == cost_count).alias("has_all_cost_points"),
-            (pl.col("min_oos_windows") >= args.gate_min_oos_windows).alias("passes_window_gate"),
-            (pl.col("min_oos_signals") >= args.gate_min_oos_signals).alias("passes_signal_gate"),
-            (pl.col("min_pct_positive_oos_windows") >= args.gate_min_pct_positive).alias("passes_stability_gate"),
-            (pl.col("min_avg_test_exp_r") >= args.gate_min_exp_r).alias("passes_exp_gate"),
-        ])
-        .with_columns([
-            (
-                pl.col("has_all_cost_points")
-                & pl.col("passes_window_gate")
-                & pl.col("passes_signal_gate")
-                & pl.col("passes_stability_gate")
-                & pl.col("passes_exp_gate")
-            ).alias("passes_all_gates")
-        ])
-        .with_columns([
-            pl.when(pl.col("passes_all_gates"))
-            .then(pl.lit("promote_to_holdout"))
-            .when(pl.col("has_all_cost_points") & (pl.col("min_avg_test_exp_r") > 0))
-            .then(pl.lit("candidate_needs_more_stability"))
-            .otherwise(pl.lit("reject_or_rework"))
-            .alias("decision"),
-            (
-                pl.col("min_avg_test_exp_r") * 1000
-                + pl.col("min_pct_positive_oos_windows") * 100
-                + pl.col("min_oos_signals") / 1000
-            ).alias("score"),
-        ])
-        .sort(["passes_all_gates", "score"], descending=[True, True])
-    )
-    return report
-
 
 def print_shortlist(report: pl.DataFrame, top_n: int) -> None:
     shortlist = report.filter(pl.col("passes_all_gates")).head(top_n)
@@ -285,7 +241,8 @@ def main() -> None:
     console.print(
         f"Tickers={args.tickers} | Range={args.start}->{args.end} | "
         f"Friction: {friction_desc} | Gates: windows>={args.gate_min_oos_windows}, "
-        f"signals>={args.gate_min_oos_signals}, pct>={args.gate_min_pct_positive}, exp>={args.gate_min_exp_r}"
+        f"signals>={args.gate_min_oos_signals}, pct>={args.gate_min_pct_positive}, "
+        f"exp>={args.gate_min_exp_r} | Strategy source: {args.strategy_source}"
     )
 
     summary_frames: list[pl.DataFrame] = []
@@ -300,7 +257,14 @@ def main() -> None:
         summary_frames.append(df)
 
     combined = pl.concat(summary_frames)
-    report = build_gate_report(combined, cost_count=len(costs), args=args)
+    report = build_gate_report(
+        combined=combined,
+        cost_count=len(costs),
+        gate_min_oos_windows=args.gate_min_oos_windows,
+        gate_min_oos_signals=args.gate_min_oos_signals,
+        gate_min_pct_positive=args.gate_min_pct_positive,
+        gate_min_exp_r=args.gate_min_exp_r,
+    )
 
     print_shortlist(report, args.top_n)
 
@@ -330,6 +294,8 @@ def main() -> None:
             "test_months": args.test_months,
             "ratios": args.ratios,
             "walkforward_min_signals": args.walkforward_min_signals,
+            "strategy_source": args.strategy_source,
+            "strategy_names": args.strategy_names,
             "cost_grid": costs,
             "gate_min_oos_windows": args.gate_min_oos_windows,
             "gate_min_oos_signals": args.gate_min_oos_signals,

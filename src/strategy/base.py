@@ -8,6 +8,7 @@ a boolean signal column indicating where setups trigger.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import polars as pl
 
@@ -28,6 +29,25 @@ class BaseStrategy(ABC):
         Return the same DataFrame with an added boolean column named "signal".
         """
         ...
+
+    @property
+    def required_features(self) -> set[str]:
+        """Columns this strategy expects on the input frame."""
+        return set()
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        """Optional bounded search space for orchestrators and agents."""
+        return {}
+
+    @property
+    def evaluation_mode(self) -> str:
+        """Evaluation family used by research orchestration."""
+        return "binary"
+
+    def strategy_config(self) -> dict[str, Any]:
+        """Serializable runtime configuration for registry and orchestration use."""
+        return {}
 
     def __repr__(self) -> str:
         return f"<Strategy: {self.name}>"
