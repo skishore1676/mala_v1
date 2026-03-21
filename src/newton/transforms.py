@@ -22,6 +22,11 @@ class FeatureTransform(ABC):
     required_input_columns: set[str]
 
     @property
+    def spec(self) -> str:
+        """Stable identifier for de-duplicating parameterized transforms."""
+        return self.name
+
+    @property
     @abstractmethod
     def output_columns(self) -> set[str]:
         ...
@@ -195,6 +200,10 @@ class MarketImpulseTransform(FeatureTransform):
     required_input_columns: set[str] = frozenset({"timestamp", "open", "high", "low", "close", "volume"})
 
     @property
+    def spec(self) -> str:
+        return f"{self.name}:{self.timeframe}:vma_{self.vma_length}"
+
+    @property
     def output_columns(self) -> set[str]:
         tag = timeframe_tag(self.timeframe)
         columns = {
@@ -258,4 +267,4 @@ class MarketImpulseTransform(FeatureTransform):
 
 
 def transform_names(transforms: Iterable[FeatureTransform]) -> list[str]:
-    return [transform.name for transform in transforms]
+    return [transform.spec for transform in transforms]

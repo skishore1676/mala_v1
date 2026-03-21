@@ -70,6 +70,7 @@ Quick examples:
 - `orchestrator.run_action(ResearchStage.M1_DISCOVERY, "parameter_sweep", ...)` to execute a stage-safe tool.
 - `PhysicsEngine().enrich_for_features(df, strategy.required_features)` when you need only the declared Newton features.
 - `PhysicsEngine().enrich_for_features(df, {"market_impulse"})` if you need to request the Market Impulse transform explicitly by name.
+- `PhysicsEngine().enrich_for_features(df, {"market_impulse:15m"})` if you want a parameterized Market Impulse transform for timeframe sweeps.
 
 ## Outputs The Agent Must Produce
 

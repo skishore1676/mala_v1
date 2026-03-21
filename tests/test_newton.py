@@ -205,6 +205,64 @@ def test_enrich_for_features_accepts_market_impulse_transform_name() -> None:
     assert "vma_10_5m" in result.columns
 
 
+def test_enrich_for_features_accepts_parameterized_market_impulse_transform_name() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, {"market_impulse:15m"})
+
+    assert "impulse_regime_15m" in result.columns
+    assert "vma_10_15m" in result.columns
+    assert "impulse_regime_5m" not in result.columns
+
+
+def test_enrich_for_features_resolves_market_impulse_from_feature_columns() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, {"impulse_regime_15m", "vma_10"})
+
+    assert "impulse_regime_15m" in result.columns
+    assert "vma_10" in result.columns
+
+
+def test_enrich_for_features_can_build_multiple_market_impulse_timeframes() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(90)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 104, 90),
+            "high": np.linspace(100.1, 104.1, 90),
+            "low": np.linspace(99.9, 103.9, 90),
+            "close": np.linspace(100, 104, 90),
+            "volume": np.full(90, 1000.0),
+        }
+    )
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, {"market_impulse:5m", "market_impulse:15m"})
+
+    assert "impulse_regime_5m" in result.columns
+    assert "impulse_regime_15m" in result.columns
+
+
 def test_market_impulse_strategy_declares_pipeline_resolvable_features() -> None:
     timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
     df = pl.DataFrame(
@@ -223,3 +281,23 @@ def test_market_impulse_strategy_declares_pipeline_resolvable_features() -> None
 
     assert strategy.required_features.issubset(result.columns)
     assert "vma_10_5m" in result.columns
+
+
+def test_market_impulse_strategy_can_request_alternate_regime_timeframe() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    strategy = MarketImpulseStrategy(regime_timeframe="15m")
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, strategy.required_features)
+
+    assert "impulse_regime_15m" in result.columns
+    assert strategy.required_features.issubset(result.columns)

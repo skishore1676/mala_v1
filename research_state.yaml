@@ -20,7 +20,9 @@ architecture_decisions:
     plus one top-level orchestrator entrypoint.
     Current reusable seams include callable research tools, policy-driven reward:risk
     evaluation, and Newton feature-targeted enrichment through composable transforms
-    plus a shared multi-timeframe resampler. The orchestrator can now invoke
+    plus a shared multi-timeframe resampler. Market Impulse is now parameterizable
+    through feature specs like market_impulse:15m, so agents can sweep regime
+    timeframes through the standard Newton pipeline. The orchestrator can now invoke
     stage-safe research tools directly instead of only advertising next actions.
 
 research_agent:

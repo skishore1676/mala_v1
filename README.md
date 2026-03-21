@@ -93,7 +93,7 @@ Newton can now be used in two ways:
 - compatibility mode: `PhysicsEngine.enrich(df)` applies the default core transform set,
 - feature-targeted mode: `PhysicsEngine.enrich_for_features(df, required_features)` builds only the transforms needed for the selected strategies.
 
-For multi-timeframe research, `MarketImpulseTransform` now uses a reusable `TimeframeResampler` so higher-timeframe joins are handled consistently instead of being hand-coded inside scripts.
+For multi-timeframe research, `MarketImpulseTransform` now uses a reusable `TimeframeResampler` so higher-timeframe joins are handled consistently instead of being hand-coded inside scripts. The feature pipeline also accepts parameterized transform specs such as `market_impulse:15m`, allowing agents to sweep regime timeframes without adding Newton special cases.
 
 - `velocity_1m = close[t] - close[t-1]`
 - `accel_1m = velocity_1m[t] - velocity_1m[t-1]`
@@ -373,7 +373,7 @@ The first reusable orchestration pieces now live in:
 
 Legacy stage runners now live under `scripts/legacy/`, and the active execution model is the reusable API surface in `src/research/` plus the top-level orchestrator preview CLI.
 
-The research flow also uses strategy-declared `required_features` to ask Newton only for the needed transforms, including `MarketImpulseTransform` through the same `enrich_for_features(...)` pipeline used by other strategies.
+The research flow also uses strategy-declared `required_features` to ask Newton only for the needed transforms, including parameterized `MarketImpulseTransform` variants through the same `enrich_for_features(...)` pipeline used by other strategies.
 
 A canonical execution pattern now exists for agentic research work:
 

@@ -21,7 +21,7 @@ Time filter:
 from __future__ import annotations
 
 from datetime import time
-from typing import Optional
+from typing import Any, Optional
 
 import polars as pl
 from loguru import logger
@@ -40,13 +40,15 @@ class MarketImpulseStrategy(BaseStrategy):
         market_open_hour: int = 9,
         market_open_minute: int = 30,
         vma_col: str = "vma_10",
-        regime_col: str = "impulse_regime_5m",
+        regime_timeframe: str = "5m",
+        regime_col: str | None = None,
     ) -> None:
         self.entry_buffer_minutes = entry_buffer_minutes
         self.entry_window_minutes = entry_window_minutes
         self.market_open = time(market_open_hour, market_open_minute)
         self.vma_col = vma_col
-        self.regime_col = regime_col
+        self.regime_timeframe = regime_timeframe
+        self.regime_col = regime_col or f"impulse_regime_{regime_timeframe}"
 
         # Compute the valid entry window bounds
         open_minutes = market_open_hour * 60 + market_open_minute
@@ -66,6 +68,25 @@ class MarketImpulseStrategy(BaseStrategy):
             "low",
             self.vma_col,
             self.regime_col,
+        }
+
+    @property
+    def parameter_space(self) -> dict[str, list[Any]]:
+        return {
+            "entry_buffer_minutes": [3, 5],
+            "entry_window_minutes": [45, 60, 90],
+            "regime_timeframe": ["5m", "15m", "30m", "1h"],
+        }
+
+    def strategy_config(self) -> dict[str, Any]:
+        return {
+            "entry_buffer_minutes": self.entry_buffer_minutes,
+            "entry_window_minutes": self.entry_window_minutes,
+            "market_open_hour": self.market_open.hour,
+            "market_open_minute": self.market_open.minute,
+            "vma_col": self.vma_col,
+            "regime_timeframe": self.regime_timeframe,
+            "regime_col": self.regime_col,
         }
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
