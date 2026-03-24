@@ -14,6 +14,7 @@ from src.research import (
     ResearchToolbox,
     load_research_state,
 )
+from src.research.tools import _bounded_param_grid
 
 
 def _write_state_file(path: Path) -> None:
@@ -152,6 +153,21 @@ def test_toolbox_parameter_sweep_and_baselines(tmp_path: Path) -> None:
     assert comparison.artifacts["comparisons"][0]["baseline"] == "Elastic Band z=1.25/w=360+dm"
 
 
+def test_bounded_param_grid_samples_across_full_space() -> None:
+    configs = _bounded_param_grid(
+        {
+            "a": [1, 2],
+            "b": [10, 20],
+            "c": [100, 200],
+        },
+        max_configs=4,
+    )
+
+    assert len(configs) == 4
+    assert {config["a"] for config in configs} == {1, 2}
+    assert {config["b"] for config in configs} == {10, 20}
+
+
 def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
     state_path = tmp_path / "research_state.yaml"
     _write_state_file(state_path)
@@ -182,6 +198,9 @@ def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
     assert "aggregate" in result.artifacts
     assert isinstance(result.artifacts["detail"], pl.DataFrame)
     assert isinstance(result.artifacts["aggregate"], pl.DataFrame)
+    assert {"oos_signals", "avg_test_exp_r", "pct_positive_oos_windows", "avg_test_confidence"} <= set(
+        result.artifacts["aggregate"].columns
+    )
 
 
 def test_orchestrator_can_run_allowed_action(tmp_path: Path) -> None:

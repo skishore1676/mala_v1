@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import polars as pl
 
+from src.research.stages.candidates import candidate_identity_columns
+
 
 def parse_costs(cost_grid: str) -> list[float]:
     costs = [float(x.strip()) for x in cost_grid.split(",") if x.strip()]
@@ -25,8 +27,9 @@ def build_gate_report(
     gate_min_pct_positive: float,
     gate_min_exp_r: float,
 ) -> pl.DataFrame:
+    group_cols = candidate_identity_columns(combined)
     return (
-        combined.group_by(["ticker", "strategy", "direction"])
+        combined.group_by(group_cols)
         .agg([
             pl.len().alias("observed_cost_points"),
             pl.col("oos_windows").min().alias("min_oos_windows"),

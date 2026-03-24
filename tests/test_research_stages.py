@@ -30,6 +30,7 @@ from src.research.stages import (
     run_walk_forward_for_strategies,
     summarize_holdout,
 )
+from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
 
 
 class _StubStrategy:
@@ -150,6 +151,55 @@ def test_build_gate_report_promotes_passing_candidate() -> None:
     assert row["decision"] == "promote_to_holdout"
 
 
+def test_candidate_identity_columns_preserve_config_fields() -> None:
+    df = pl.DataFrame(
+        [
+            {
+                "ticker": "SPY",
+                "strategy": "Opening Drive Classifier",
+                "direction": "short",
+                "catalog_strategy": "Opening Drive Classifier",
+                "opening_window_minutes": 30,
+                "volume_multiplier": 1.4,
+                "oos_windows": 6,
+                "oos_signals": 5000,
+                "avg_test_exp_r": 0.12,
+                "pct_positive_oos_windows": 0.8,
+                "avg_test_confidence": 0.6,
+            }
+        ]
+    )
+
+    assert candidate_identity_columns(df) == [
+        "ticker",
+        "strategy",
+        "direction",
+        "opening_window_minutes",
+        "volume_multiplier",
+    ]
+
+
+def test_build_candidate_strategy_prefers_catalog_strategy_params() -> None:
+    strategy = build_candidate_strategy(
+        {
+            "ticker": "SPY",
+            "strategy": "Opening Drive Classifier",
+            "direction": "short",
+            "catalog_strategy": "Opening Drive Classifier",
+            "opening_window_minutes": 30,
+            "entry_start_offset_minutes": 30,
+            "entry_end_offset_minutes": 90,
+            "min_drive_return_pct": 0.002,
+            "volume_multiplier": 1.4,
+            "breakout_buffer_pct": 0.0005,
+        }
+    )
+
+    assert strategy.name == "Opening Drive Classifier"
+    assert strategy.strategy_config()["opening_window_minutes"] == 30
+    assert strategy.strategy_config()["volume_multiplier"] == 1.4
+
+
 def test_holdout_helpers(tmp_path) -> None:
     gate_dir = tmp_path / "results"
     gate_dir.mkdir()
@@ -213,6 +263,34 @@ def test_holdout_stage_logic() -> None:
     summary_df = summarize_holdout(detail_df, cost_count=1)
     row = summary_df.row(0, named=True)
     assert row["decision"] == "promote_to_execution_mapping"
+
+
+def test_holdout_summary_preserves_candidate_config_columns() -> None:
+    detail_df = pl.DataFrame(
+        [
+            {
+                "ticker": "SPY",
+                "strategy": "Opening Drive Classifier",
+                "direction": "short",
+                "catalog_strategy": "Opening Drive Classifier",
+                "opening_window_minutes": 30,
+                "volume_multiplier": 1.4,
+                "cost_bps": 8.0,
+                "selected_ratio": 1.5,
+                "calib_signals": 10,
+                "calib_exp_r": 0.1,
+                "holdout_signals": 600,
+                "holdout_confidence": 0.7,
+                "holdout_exp_r": 0.2,
+                "passes_cost_gate": True,
+            }
+        ]
+    )
+
+    summary_df = summarize_holdout(detail_df, cost_count=1)
+    row = summary_df.row(0, named=True)
+    assert row["opening_window_minutes"] == 30
+    assert row["volume_multiplier"] == 1.4
 
 
 def test_execution_stage_helpers() -> None:

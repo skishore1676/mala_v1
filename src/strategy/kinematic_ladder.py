@@ -15,7 +15,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
-from src.strategy.base import BaseStrategy
+from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_time_expr
 
 
@@ -30,8 +30,8 @@ class KinematicLadderStrategy(BaseStrategy):
         volume_multiplier: float = 1.1,
         use_time_filter: bool = True,
         use_volume_filter: bool = True,
-        session_start: time = time(9, 35),
-        session_end: time = time(15, 30),
+        session_start: time | str = time(9, 35),
+        session_end: time | str = time(15, 30),
     ) -> None:
         self.regime_window = regime_window
         self.accel_window = accel_window
@@ -39,8 +39,8 @@ class KinematicLadderStrategy(BaseStrategy):
         self.volume_multiplier = volume_multiplier
         self.use_time_filter = use_time_filter
         self.use_volume_filter = use_volume_filter
-        self.session_start = session_start
-        self.session_end = session_end
+        self.session_start = coerce_time(session_start)
+        self.session_end = coerce_time(session_end)
 
     @property
     def name(self) -> str:

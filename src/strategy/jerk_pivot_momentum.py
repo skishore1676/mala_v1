@@ -33,7 +33,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
-from src.strategy.base import BaseStrategy
+from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_time_expr
 
 
@@ -52,8 +52,8 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         volume_ma_period: int = settings.volume_ma_period,
         use_volume_filter: bool = True,
         use_time_filter: bool = True,
-        session_start: time = time(9, 35),
-        session_end: time = time(15, 30),
+        session_start: time | str = time(9, 35),
+        session_end: time | str = time(15, 30),
         strategy_label: str | None = None,
     ) -> None:
         self.vpoc_proximity_pct = vpoc_proximity_pct
@@ -62,8 +62,8 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         self.volume_ma_period = volume_ma_period
         self.use_volume_filter = use_volume_filter
         self.use_time_filter = use_time_filter
-        self.session_start = session_start
-        self.session_end = session_end
+        self.session_start = coerce_time(session_start)
+        self.session_end = coerce_time(session_end)
         self._strategy_label = strategy_label
 
     @property
@@ -215,7 +215,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
 
         logger.info(
             "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
-            "[vol_filter={}, vpoc_prox={:.3f}]",
+            "[vol_filter={}, vpoc_prox={:.3f}, jerk_lookback={}, volume_multiplier={:.2f}]",
             self.name,
             total,
             longs,
@@ -223,5 +223,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             len(df),
             self.use_volume_filter,
             self.vpoc_proximity_pct,
+            self.jerk_lookback,
+            self.volume_multiplier,
         )
         return df

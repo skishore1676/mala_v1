@@ -9,8 +9,8 @@ import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.policies import RewardRiskWinCondition
+from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
 from src.research.stages.walk_forward import cost_r_from_bps
-from src.strategy.factory import build_strategy_by_name
 from src.time_utils import et_date_expr
 
 
@@ -79,7 +79,9 @@ def choose_ratio(
 
 
 def promoted_candidates_from_gate_report(gate_df: pl.DataFrame) -> pl.DataFrame:
-    return gate_df.filter(pl.col("decision") == "promote_to_holdout").select(["ticker", "strategy", "direction"])
+    return gate_df.filter(pl.col("decision") == "promote_to_holdout").select(
+        candidate_identity_columns(gate_df)
+    )
 
 
 def run_holdout_validation_for_candidates(
@@ -102,10 +104,13 @@ def run_holdout_validation_for_candidates(
         ticker = candidate["ticker"]
         strategy_name = candidate["strategy"]
         direction = candidate["direction"]
+        candidate_context = {
+            key: value for key, value in candidate.items() if key not in {"ticker", "strategy", "direction"}
+        }
         if ticker not in ticker_frames:
             continue
 
-        strategy = build_strategy_by_name(strategy_name)
+        strategy = build_candidate_strategy(candidate)
         df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
         df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
 
@@ -132,6 +137,7 @@ def run_holdout_validation_for_candidates(
                         "ticker": ticker,
                         "strategy": strategy_name,
                         "direction": direction,
+                        **candidate_context,
                         "cost_bps": cost_bps,
                         "selected_ratio": None,
                         "calib_signals": 0,
@@ -157,6 +163,7 @@ def run_holdout_validation_for_candidates(
                     "ticker": ticker,
                     "strategy": strategy_name,
                     "direction": direction,
+                    **candidate_context,
                     "cost_bps": cost_bps,
                     "selected_ratio": selected_ratio,
                     "calib_signals": int(calib_stats["signals"]),
@@ -172,8 +179,9 @@ def run_holdout_validation_for_candidates(
 
 
 def summarize_holdout(detail_df: pl.DataFrame, cost_count: int) -> pl.DataFrame:
+    group_cols = candidate_identity_columns(detail_df)
     return (
-        detail_df.group_by(["ticker", "strategy", "direction"])
+        detail_df.group_by(group_cols)
         .agg([
             pl.len().alias("observed_cost_points"),
             pl.col("holdout_signals").min().alias("min_holdout_signals"),

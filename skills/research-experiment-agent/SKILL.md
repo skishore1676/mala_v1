@@ -40,8 +40,10 @@ Every cycle should end with one of four outcomes:
 - Select eligible experiments for the current stage from the deterministic workflow.
 - Run bounded parameter sweeps, ablations, retunes, walk-forward tests, and holdout checks using the available pipeline.
 - Use the repo's callable research tools and strategy metadata instead of reconstructing shell workflows from scratch.
+- Prefer `./.venv/bin/python` for local execution instead of assuming `python` is already pointing at the project environment.
 - Treat `scripts/run_research_orchestrator.py` as the only top-level orchestration CLI.
 - Avoid scripts under `scripts/legacy/` unless preserving or comparing historical research output is the point.
+- Avoid creating scratch scripts in the repo root when a one-shot command, the orchestrator, or the toolbox can answer the question directly.
 - Query prior results and compare the new idea against known baselines.
 - Recommend the next stage or a rework decision based on evidence.
 - Record reasoning, assumptions, and lineage so future sessions can continue the work.
@@ -63,6 +65,7 @@ Every cycle should end with one of four outcomes:
 - Existing evidence from `research_state.yaml`, `results.db`, and prior artifacts.
 - The callable experiment surface in `src/research/tools.py` and strategy-declared `required_features`.
 - The script support policy in `scripts/STATUS.md` so you can distinguish the active API-first path from quarantined legacy runners.
+- The tracked ticker scope from `research_state.yaml`; do not silently expand to new symbols without saying why.
 
 Quick examples:
 
@@ -83,6 +86,34 @@ Quick examples:
 - A run summary with the metrics that matter for that stage.
 - A decision: `promote`, `retune`, `gather_more_evidence`, or `kill`.
 - A note for repo memory describing what was learned and what should happen next.
+- A written gate outcome for every stage that was actually run.
+
+Gate logging contract:
+
+- Every time the agent finishes `M1`, `M2`, `M3`, `M4`, or `M5`, it must persist:
+  - the stage,
+  - the tool used,
+  - the key metrics,
+  - the disposition,
+  - the next action,
+  - and the artifact paths.
+- Prefer the structured journal helper in `src/research/reporting.py` when a reusable runner or script is involved.
+- If using a one-shot command instead of a reusable runner, still write a stage note into the run output directory before moving to the next gate.
+- Never advance a candidate to the next gate without leaving behind a readable stage outcome.
+- If a stage has mixed outcomes across candidates, say so explicitly and record both the survivors and the failures.
+
+Tooling notes:
+
+- `ResearchToolResult` returns structured `summary` and `artifacts`; do not assume a markdown-rendered summary field exists.
+- If you inject `ticker_frames` into a research tool, keep `start_date` and `end_date` aligned with the actual frame coverage or expect warnings and potentially empty walk-forward windows.
+- Some parameter spaces contain no-op combinations; if a parameter is disabled by another flag, call that out instead of pretending those configs are fully distinct.
+
+Execution preference:
+
+- First choice: use `./.venv/bin/python - <<'PY' ... PY` for one-shot orchestrator and toolbox calls.
+- Second choice: use `scripts/run_research_orchestrator.py` for planning and inspection.
+- Only create a temporary or durable scratch script when the workflow is too large for an inline command or the user explicitly wants a reusable file.
+- Do not treat scratch scripts as the default research interface.
 
 ## Workflow
 
@@ -94,6 +125,11 @@ Quick examples:
 
 3. Check current state.
    Read the registry and prior evidence to determine the current stage, allowed tickers, known failures, and remaining uncertainty.
+
+   Default research scope:
+   - Start with the tracked tickers for the strategy.
+   - If only one ticker is tracked, say that explicitly in the run summary.
+   - Broaden to a small benchmark basket only when the goal is broader M1 discovery rather than re-validating the tracked candidate.
 
 4. Choose the smallest valid next experiment.
    Prefer the cheapest experiment that can materially change the decision.
@@ -109,6 +145,9 @@ Quick examples:
 
 8. Write the disposition.
    Recommend promotion, retune, more evidence, or termination, and explain the reasoning in plain language.
+
+9. Write the gate note before moving on.
+   Persist the outcome for that stage so another agent can resume without re-deriving the reasoning.
 
 ## Stage Guidance
 

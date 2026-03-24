@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from itertools import islice, product
+from itertools import product
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import polars as pl
+from loguru import logger
 
 from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
@@ -47,10 +48,21 @@ def _bounded_param_grid(
 
     keys = sorted(parameter_space)
     iterables = [parameter_space[key] for key in keys]
-    configs: list[dict[str, Any]] = []
-    for values in islice(product(*iterables), max_configs):
-        configs.append(dict(zip(keys, values, strict=True)))
-    return configs
+    all_configs = [dict(zip(keys, values, strict=True)) for values in product(*iterables)]
+    if len(all_configs) <= max_configs:
+        return all_configs
+    if max_configs <= 1:
+        return [all_configs[0]]
+
+    # Sample evenly across the Cartesian product instead of truncating to the
+    # first N lexicographic configs, which can over-focus on one parameter slice.
+    indices = sorted(
+        {
+            round(i * (len(all_configs) - 1) / (max_configs - 1))
+            for i in range(max_configs)
+        }
+    )
+    return [all_configs[index] for index in indices]
 
 
 def _config_columns(configs: list[dict[str, Any]]) -> list[str]:
@@ -523,6 +535,7 @@ class ResearchToolbox:
             ticker_frames=ticker_frames,
         )
         detail_df = self._run_strategy_sweep(
+            strategy_name=strategy_name,
             strategies=strategies,
             configs=configs,
             ticker_frames=enriched_frames,
@@ -570,14 +583,50 @@ class ResearchToolbox:
             raw = ticker_frames.get(ticker) if ticker_frames is not None else None
             if raw is None:
                 raw = self._storage.load_bars(ticker, start_date, end_date)
+            else:
+                self._warn_on_frame_date_mismatch(
+                    ticker=ticker,
+                    frame=raw,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             if raw.is_empty():
                 continue
             enriched[ticker] = self._physics.enrich_for_features(raw, needed_features)
         return enriched
 
     @staticmethod
+    def _warn_on_frame_date_mismatch(
+        *,
+        ticker: str,
+        frame: pl.DataFrame,
+        start_date: date,
+        end_date: date,
+    ) -> None:
+        if frame.is_empty() or "timestamp" not in frame.columns:
+            return
+        bounds = frame.select([
+            pl.col("timestamp").dt.date().min().alias("frame_start"),
+            pl.col("timestamp").dt.date().max().alias("frame_end"),
+        ]).row(0, named=True)
+        frame_start = bounds["frame_start"]
+        frame_end = bounds["frame_end"]
+        if frame_start is None or frame_end is None:
+            return
+        if frame_start > start_date or frame_end < end_date:
+            logger.warning(
+                "Injected ticker frame for {} covers {} -> {}, but requested research window is {} -> {}",
+                ticker,
+                frame_start,
+                frame_end,
+                start_date,
+                end_date,
+            )
+
+    @staticmethod
     def _run_strategy_sweep(
         *,
+        strategy_name: str,
         strategies: list[BaseStrategy],
         configs: list[dict[str, Any]],
         ticker_frames: dict[str, pl.DataFrame],
@@ -606,6 +655,7 @@ class ResearchToolbox:
                     detail_rows.append(
                         {
                             **row,
+                            "catalog_strategy": strategy_name,
                             "base_strategy": strategy.__class__.__name__,
                             **config,
                         }
@@ -623,7 +673,10 @@ class ResearchToolbox:
             return pl.DataFrame()
 
         config_cols = [column for column in _config_columns(configs) if column in detail_df.columns]
-        group_cols = ["ticker", "strategy", "direction", *config_cols]
+        context_cols = [
+            column for column in ("catalog_strategy", "base_strategy") if column in detail_df.columns
+        ]
+        group_cols = ["ticker", "strategy", "direction", *context_cols, *config_cols]
         aggregate_df = (
             detail_df.group_by(group_cols)
             .agg([
@@ -644,6 +697,12 @@ class ResearchToolbox:
                 .otherwise(pl.lit("low_n"))
                 .alias("signal_quality")
             )
+        aggregate_df = aggregate_df.with_columns([
+            pl.col("total_oos_signals").alias("oos_signals"),
+            pl.col("avg_oos_exp_r").alias("avg_test_exp_r"),
+            pl.col("pct_positive_windows").alias("pct_positive_oos_windows"),
+            pl.col("avg_confidence").alias("avg_test_confidence"),
+        ])
         return aggregate_df.sort(["ticker", "direction", "avg_oos_exp_r"], descending=[False, False, True])
 
     @staticmethod

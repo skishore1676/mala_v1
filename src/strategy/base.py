@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from datetime import time
 from typing import Any
 
 import polars as pl
@@ -60,3 +61,10 @@ def required_feature_union(strategies: Iterable[BaseStrategy]) -> set[str]:
     for strategy in strategies:
         required |= set(strategy.required_features)
     return required
+
+
+def coerce_time(value: time | str) -> time:
+    """Accept time objects or HH:MM-style strings from serialized strategy configs."""
+    if isinstance(value, time):
+        return value
+    return time.fromisoformat(value)

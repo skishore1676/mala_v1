@@ -115,8 +115,8 @@ refactor_validation:
       minimum_smoke_test: "Instantiates, generates momentum signals, completes walk-forward stage."
     - strategy: "Jerk-Pivot Momentum (tight)"
       status: candidate
-      representative_tickers: [IWM]
-      expected_directions: [combined]
+      representative_tickers: [NVDA]
+      expected_directions: [short]
       why_it_matters: >
         Validates a different directional feature dependency built around VPOC proximity,
         jerk inflection, and directional evaluation flow.
@@ -173,20 +173,26 @@ strategies:
 
   "Jerk-Pivot Momentum (tight)":
     status: candidate
-    tickers: [IWM]
-    directions: [combined]
+    tickers: [NVDA]
+    directions: [short]
     optimal_params:
-      vpoc_proximity_pct: 0.003
+      vpoc_proximity_pct: 0.002
       jerk_lookback: 10
-      volume_multiplier: 1.1
+      volume_multiplier: 1.2
       use_volume_filter: true
+      reward_risk_ratio: 1.5
     evidence: >
-      Tight variant is already wired into walk-forward evaluation. Prior backtest notes
-      indicate IWM showed positive expectancy at 2:1 reward:risk with full positive-window
-      hit rate in the exploratory run, making it a useful alternate regression fixture.
+      Tight variant passes walk‑forward convergence and holdout validation (2026‑03‑22). Retune analysis (2026‑03‑22) shows NVDA short with tighter filters (vpoc=0.002, volume_multiplier=1.2, ratio=1.5) yields holdout E[R]=+0.251, stress‑test survival probability ≈60%, median drawdown ≈13.4R. IWM short fails stress tests and is excluded. SPY combined failed holdout (E[R]=‑0.0366) and is excluded.
     notes: >
-      Keep this tracked as a candidate so the refactor validation set includes a strategy
-      with different feature dependencies than Elastic Band, Opening Drive, and Kinematic Ladder.
+      Retuned variant ready for final validation before live testing. Keep this tracked as a candidate so the refactor validation set includes a strategy with different feature dependencies than Elastic Band, Opening Drive, and Kinematic Ladder.
+    retune_results:
+      NVDA_short:
+        config: vpoc=0.002, volume_multiplier=1.2, ratio=1.5
+        holdout_exp_r: 0.251
+        stress_prob_pos: 0.604
+        stress_median_dd: 13.4
+      IWM_short: excluded
+    last_updated: 2026-03-22
 
   "Compression Expansion Breakout":
     status: dead

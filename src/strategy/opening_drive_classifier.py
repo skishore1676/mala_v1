@@ -14,7 +14,7 @@ from typing import Any
 import polars as pl
 from loguru import logger
 
-from src.strategy.base import BaseStrategy
+from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_date_expr, et_time_expr
 
 
@@ -29,7 +29,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
 
     def __init__(
         self,
-        market_open: time = time(9, 30),
+        market_open: time | str = time(9, 30),
         opening_window_minutes: int = 25,
         entry_start_offset_minutes: int = 25,
         entry_end_offset_minutes: int = 120,
@@ -43,7 +43,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         enable_fail: bool = True,
         strategy_label: str | None = None,
     ) -> None:
-        self.market_open = market_open
+        self.market_open = coerce_time(market_open)
         self.opening_window_minutes = opening_window_minutes
         self.entry_start_offset_minutes = entry_start_offset_minutes
         self.entry_end_offset_minutes = entry_end_offset_minutes

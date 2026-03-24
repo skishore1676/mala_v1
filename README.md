@@ -207,121 +207,13 @@ This does:
 4. Compute forward MFE/MAE over configured lookahead.
 5. Summarize signal quality and save immutable experiment artifacts.
 
-### Trade Simulation Backtest (Legacy Market Impulse Runner)
+### Legacy Provenance
 
-Run:
+Legacy runners are preserved under `scripts/legacy/` for provenance and historical comparison only.
 
-```bash
-python scripts/legacy/run_market_impulse.py --tickers SPY QQQ IWM
-```
-
-This does:
-
-1. Load cached bars.
-2. Enrich with both base physics and Market Impulse MTF columns.
-3. Generate directional entries.
-4. Walk bar-by-bar to exit each trade with explicit stop/EOD logic.
-5. Report P&L metrics and write trade logs to `data/results/`.
-
-### Research Strategy Backtests (Novel Ideas)
-
-Run:
-
-```bash
-uv run python scripts/legacy/run_novel_ideas.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
-```
-
-This does:
-
-1. Runs directional strategy candidates (`Elastic Band`, `Kinematic Ladder`, `Compression Breakout`, `Regime Router`).
-2. Produces classic directional summaries (signal counts, 2:1 confidence, MFE/MAE diagnostics).
-3. Produces ratio-grid robustness (`1.0, 1.25, 1.5, 2.0`) with Monte Carlo probability of positive expectancy.
-4. Saves outputs in `data/results/` as summary and robustness CSV/JSON artifacts.
-
-### Opening Drive Classifier Backtest (Legacy Runner)
-
-Run:
-
-```bash
-uv run python scripts/legacy/run_opening_drive_classifier.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28
-```
-
-This produces directional summary, robustness, and mode-level summary (`continue` vs `fail`).
-
-### Walk-Forward Out-of-Sample Validation (Legacy Runner)
-
-Run:
-
-```bash
-uv run python scripts/legacy/run_walk_forward_novel.py --tickers SPY QQQ IWM --start 2025-01-01 --end 2026-02-28 --train-months 6 --test-months 3
-```
-
-Registry-backed variants now supported:
-
-```bash
-uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source tracked
-uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source validation
-uv run python scripts/legacy/run_walk_forward_novel.py --strategy-source tracked --strategy-names "Elastic Band z=1.25/w=360+dm"
-```
-
-This does:
-
-1. Splits history into rolling train/test windows.
-2. Picks best reward:risk ratio on train data.
-3. Tests selected ratio on the following out-of-sample window.
-4. Saves detailed and aggregated OOS results in `data/results/`.
-
-### Convergence Gate Pipeline (Legacy Runner)
-
-Run:
-
-```bash
-uv run python scripts/legacy/run_convergence_pipeline.py --cost-grid 0.05,0.08,0.12
-```
-
-Focused convergence runs now support the same strategy-selection surface:
-
-```bash
-uv run python scripts/legacy/run_convergence_pipeline.py --strategy-source validation
-uv run python scripts/legacy/run_convergence_pipeline.py --strategy-source tracked --strategy-names "Jerk-Pivot Momentum (tight)"
-```
-
-This does:
-
-1. Runs walk-forward across multiple friction assumptions.
-2. Aggregates candidate robustness across costs.
-3. Applies promotion gates (windows, signal count, OOS hit-rate, expectancy floor).
-4. Produces a ranked shortlist for holdout promotion.
-
-### Holdout Validation (Promoted Candidates Only, Legacy Runner)
-
-Run:
-
-```bash
-uv run python scripts/legacy/run_holdout_validation.py
-```
-
-This does:
-
-1. Loads only candidates promoted by convergence gates.
-2. Fits ratio on calibration period only.
-3. Evaluates holdout-only expectancy across friction stress assumptions.
-4. Emits final holdout pass/fail promotion decisions.
-
-### Execution Mapping + Monte Carlo Stress (M6, Legacy Runner)
-
-Run:
-
-```bash
-python scripts/legacy/run_execution_mapping.py
-```
-
-This does:
-
-1. Loads holdout-promoted candidates (`promote_to_execution_mapping`).
-2. Maps each to practical option structures (DTE, delta bands, entry/exit risk rules).
-3. Runs Monte Carlo execution stress with random fill/cost perturbations.
-4. Writes CSV/Markdown artifacts and stores rows in `results.db`.
+- They are not the recommended path for new research work.
+- The active execution path is `ResearchOrchestrator` plus `src/research/tools.py`.
+- If you need an old runner for comparison, see [scripts/legacy/README.md](/Users/suman/kg_env/projects/mala_v1/scripts/legacy/README.md).
 
 ## Refactor Validation Set
 
@@ -387,6 +279,14 @@ result = orchestrator.run_action(
     strategy_name="Elastic Band Reversion",
 )
 ```
+
+Research tool calls return a structured `ResearchToolResult` with `summary` and `artifacts`. When injecting in-memory `ticker_frames`, keep `start_date` and `end_date` aligned with the actual frame coverage so walk-forward windows are built against the same span you loaded.
+
+Execution hygiene for agents and teammates:
+
+- Prefer `./.venv/bin/python` over assuming the shell `python` is already the project interpreter.
+- Prefer the orchestrator/toolbox API or one-shot commands over creating ad hoc scratch scripts in the repo root.
+- Start with tracked tickers from `research_state.yaml`; if you broaden the symbol set for M1 discovery, state that explicitly.
 
 ## Script Governance
 

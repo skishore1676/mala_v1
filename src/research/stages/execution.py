@@ -10,7 +10,7 @@ import polars as pl
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags
 from src.oracle.policies import RewardRiskWinCondition
-from src.strategy.factory import build_strategy_by_name
+from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
 from src.time_utils import et_date_expr
 
 
@@ -53,7 +53,9 @@ def option_mapping_for(strategy: str, direction: str) -> dict[str, str]:
 
 
 def promoted_candidates_from_holdout(holdout_summary: pl.DataFrame) -> pl.DataFrame:
-    return holdout_summary.filter(pl.col("decision") == "promote_to_execution_mapping")
+    return holdout_summary.filter(pl.col("decision") == "promote_to_execution_mapping").select(
+        candidate_identity_columns(holdout_summary)
+    )
 
 
 def median_selected_ratio(
@@ -96,6 +98,9 @@ def run_execution_mapping_for_candidates(
         ticker = candidate["ticker"]
         strategy_name = candidate["strategy"]
         direction = candidate["direction"]
+        candidate_context = {
+            key: value for key, value in candidate.items() if key not in {"ticker", "strategy", "direction"}
+        }
 
         selected_ratio = median_selected_ratio(
             holdout_detail,
@@ -106,7 +111,7 @@ def run_execution_mapping_for_candidates(
         if selected_ratio is None or ticker not in ticker_frames:
             continue
 
-        strategy = build_strategy_by_name(strategy_name)
+        strategy = build_candidate_strategy(candidate)
         df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
         df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
 
@@ -141,6 +146,7 @@ def run_execution_mapping_for_candidates(
                 "ticker": ticker,
                 "strategy": strategy_name,
                 "direction": direction,
+                **candidate_context,
                 "selected_ratio": selected_ratio,
                 "holdout_trades": int(len(wins)),
                 "holdout_win_rate": round(p, 4),
