@@ -14,7 +14,7 @@ from src.research import (
     ResearchToolbox,
     load_research_state,
 )
-from src.research.tools import _bounded_param_grid
+from src.research.tools import _annotate_plateau_metrics, _bounded_param_grid
 
 
 def _write_state_file(path: Path) -> None:
@@ -57,6 +57,17 @@ strategies:
       z_score_window: 360
       use_directional_mass: true
     notes: elastic notes
+  "Market Impulse (Cross & Reclaim)":
+    status: candidate
+    tickers: [QQQ, SPY]
+    directions: [short]
+    optimal_params:
+      entry_buffer_minutes: 5
+      entry_window_minutes: 60
+      regime_timeframe: 1h
+      vma_col: vma_10
+    evidence: market impulse evidence
+    notes: market impulse notes
         """.strip(),
         encoding="utf-8",
     )
@@ -86,6 +97,7 @@ def test_load_research_state(tmp_path: Path) -> None:
     assert state.architecture.workflow_model == "hybrid_agentic"
     assert state.research_agent is not None
     assert "Elastic Band Reversion" in state.strategies
+    assert "Market Impulse (Cross & Reclaim)" in state.strategies
     assert state.validation[0].strategy == "Elastic Band Reversion"
 
 
@@ -108,7 +120,10 @@ def test_registry_builds_tracked_and_validation_strategies(tmp_path: Path) -> No
     tracked = registry.build_tracked_strategies()
     validation = registry.build_validation_strategies()
 
-    assert [strategy.name for strategy in tracked] == ["Elastic Band z=1.25/w=360+dm"]
+    assert [strategy.name for strategy in tracked] == [
+        "Elastic Band z=1.25/w=360+dm",
+        "Market Impulse (Cross & Reclaim)",
+    ]
     assert [strategy.name for strategy in validation] == ["Elastic Band z=1.25/w=360+dm"]
 
 
@@ -217,6 +232,82 @@ def test_orchestrator_can_run_allowed_action(tmp_path: Path) -> None:
 
     assert result.tool_name == "parameter_sweep"
     assert result.summary["config_count"] == 1
+
+
+def test_parameter_sweep_dedupes_noop_kinematic_variants() -> None:
+    toolbox = ResearchToolbox()
+
+    result = toolbox.parameter_sweep(
+        "Kinematic Ladder",
+        parameter_space={
+            "regime_window": [20],
+            "accel_window": [8],
+            "use_volume_filter": [False],
+            "volume_multiplier": [1.0, 1.2],
+        },
+        max_configs=8,
+    )
+
+    assert result.summary["requested_config_count"] == 2
+    assert result.summary["duplicate_config_count"] == 1
+    assert result.summary["config_count"] == 1
+    assert len(result.artifacts["configs"]) == 1
+
+
+def test_aggregate_sweep_adds_plateau_metrics() -> None:
+    aggregate_df = pl.DataFrame(
+        [
+            {
+                "ticker": "TSLA",
+                "direction": "short",
+                "catalog_strategy": "Kinematic Ladder",
+                "base_strategy": "KinematicLadderStrategy",
+                "regime_window": 20,
+                "accel_window": 8,
+                "use_volume_filter": False,
+                "volume_multiplier": 1.0,
+                "avg_test_exp_r": 0.12,
+            },
+            {
+                "ticker": "TSLA",
+                "direction": "short",
+                "catalog_strategy": "Kinematic Ladder",
+                "base_strategy": "KinematicLadderStrategy",
+                "regime_window": 30,
+                "accel_window": 8,
+                "use_volume_filter": False,
+                "volume_multiplier": 1.0,
+                "avg_test_exp_r": 0.09,
+            },
+            {
+                "ticker": "TSLA",
+                "direction": "short",
+                "catalog_strategy": "Kinematic Ladder",
+                "base_strategy": "KinematicLadderStrategy",
+                "regime_window": 45,
+                "accel_window": 20,
+                "use_volume_filter": False,
+                "volume_multiplier": 1.0,
+                "avg_test_exp_r": 0.22,
+            },
+        ]
+    )
+
+    annotated = _annotate_plateau_metrics(
+        aggregate_df,
+        parameter_space={
+            "regime_window": [20, 30, 45],
+            "accel_window": [8, 12, 20],
+            "use_volume_filter": [True, False],
+            "volume_multiplier": [1.0, 1.05, 1.1, 1.2],
+        },
+    )
+
+    assert "plateau_neighbor_count" in annotated.columns
+    assert "plateau_positive_ratio" in annotated.columns
+    tsla_30 = annotated.filter(pl.col("regime_window") == 30).row(0, named=True)
+    assert tsla_30["plateau_neighbor_count"] >= 1
+    assert tsla_30["plateau_positive_ratio"] > 0
 
 
 def test_toolbox_convergence_grid_returns_report(tmp_path: Path) -> None:

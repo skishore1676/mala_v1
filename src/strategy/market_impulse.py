@@ -78,6 +78,10 @@ class MarketImpulseStrategy(BaseStrategy):
             "regime_timeframe": ["5m", "15m", "30m", "1h"],
         }
 
+    @property
+    def evaluation_mode(self) -> str:
+        return "directional"
+
     def strategy_config(self) -> dict[str, Any]:
         return {
             "entry_buffer_minutes": self.entry_buffer_minutes,

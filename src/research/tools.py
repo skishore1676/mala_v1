@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from itertools import product
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -72,6 +73,126 @@ def _config_columns(configs: list[dict[str, Any]]) -> list[str]:
     return sorted(keys)
 
 
+def _freeze_for_signature(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple((str(key), _freeze_for_signature(item)) for key, item in sorted(value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_signature(item) for item in value)
+    return value
+
+
+def _strategy_signature(strategy: BaseStrategy) -> tuple[str, Any]:
+    return (strategy.__class__.__name__, _freeze_for_signature(strategy.search_config()))
+
+
+def _dedupe_strategy_variants(
+    configs: list[dict[str, Any]],
+    strategies: list[BaseStrategy],
+) -> tuple[list[dict[str, Any]], list[BaseStrategy], int]:
+    deduped_configs: list[dict[str, Any]] = []
+    deduped_strategies: list[BaseStrategy] = []
+    seen: set[tuple[str, Any]] = set()
+    duplicate_count = 0
+
+    for config, strategy in zip(configs, strategies, strict=True):
+        signature = _strategy_signature(strategy)
+        if signature in seen:
+            duplicate_count += 1
+            continue
+        seen.add(signature)
+        deduped_configs.append(config)
+        deduped_strategies.append(strategy)
+
+    return deduped_configs, deduped_strategies, duplicate_count
+
+
+def _annotate_plateau_metrics(
+    aggregate_df: pl.DataFrame,
+    *,
+    parameter_space: dict[str, list[Any]],
+) -> pl.DataFrame:
+    if aggregate_df.is_empty():
+        return aggregate_df
+
+    config_cols = [column for column in parameter_space if column in aggregate_df.columns]
+    if not config_cols:
+        return aggregate_df
+
+    order_maps = {
+        key: {json.dumps(value, sort_keys=True): index for index, value in enumerate(values)}
+        for key, values in parameter_space.items()
+        if key in config_cols
+    }
+    if not order_maps:
+        return aggregate_df
+
+    group_cols = [
+        column
+        for column in ("ticker", "direction", "catalog_strategy", "base_strategy")
+        if column in aggregate_df.columns
+    ]
+
+    rows = aggregate_df.to_dicts()
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(tuple(row.get(column) for column in group_cols), []).append(row)
+
+    annotations: list[dict[str, Any]] = []
+    for row in rows:
+        key = tuple(row.get(column) for column in group_cols)
+        peers = grouped.get(key, [])
+        neighbors: list[dict[str, Any]] = []
+        for peer in peers:
+            if peer is row:
+                continue
+            is_neighbor = True
+            differs = False
+            for column, order_map in order_maps.items():
+                row_value = row.get(column)
+                peer_value = peer.get(column)
+                row_index = order_map.get(json.dumps(row_value, sort_keys=True))
+                peer_index = order_map.get(json.dumps(peer_value, sort_keys=True))
+                if row_index is None or peer_index is None:
+                    if row_value != peer_value:
+                        is_neighbor = False
+                        break
+                    continue
+                distance = abs(row_index - peer_index)
+                if distance > 1:
+                    is_neighbor = False
+                    break
+                if distance > 0:
+                    differs = True
+            if is_neighbor and differs:
+                neighbors.append(peer)
+
+        neighbor_exp = [float(item["avg_test_exp_r"]) for item in neighbors if item.get("avg_test_exp_r") is not None]
+        positive_neighbors = [value for value in neighbor_exp if value > 0]
+        neighbor_count = len(neighbors)
+        positive_ratio = (len(positive_neighbors) / neighbor_count) if neighbor_count else 0.0
+        min_neighbor_exp = min(neighbor_exp) if neighbor_exp else None
+        mean_neighbor_exp = (sum(neighbor_exp) / len(neighbor_exp)) if neighbor_exp else None
+        plateau_score = None
+        if min_neighbor_exp is not None:
+            plateau_score = (
+                float(min_neighbor_exp) * 1000
+                + positive_ratio * 100
+                + neighbor_count
+            )
+        annotations.append(
+            {
+                "plateau_neighbor_count": neighbor_count,
+                "plateau_positive_neighbors": len(positive_neighbors),
+                "plateau_positive_ratio": round(positive_ratio, 6),
+                "plateau_mean_neighbor_exp_r": round(mean_neighbor_exp, 6) if mean_neighbor_exp is not None else None,
+                "plateau_min_neighbor_exp_r": round(min_neighbor_exp, 6) if min_neighbor_exp is not None else None,
+                "plateau_score": round(plateau_score, 6) if plateau_score is not None else None,
+            }
+        )
+
+    return aggregate_df.with_columns(pl.DataFrame(annotations))
+
+
 class ResearchToolbox:
     """Python-callable tools that an experiment agent can invoke directly."""
 
@@ -122,6 +243,8 @@ class ResearchToolbox:
         sweep_space = parameter_space or entry.parameter_space
         configs = _bounded_param_grid(sweep_space, max_configs=max_configs)
         strategies = [self.registry.build(strategy_name, params) for params in configs]
+        requested_config_count = len(configs)
+        configs, strategies, duplicate_config_count = _dedupe_strategy_variants(configs, strategies)
 
         result = self._strategy_sweep_result(
             tool_name="parameter_sweep",
@@ -143,6 +266,9 @@ class ResearchToolbox:
             metrics=metrics,
         )
         result.summary["parameter_count"] = len(sweep_space)
+        result.summary["requested_config_count"] = requested_config_count
+        result.summary["duplicate_config_count"] = duplicate_config_count
+        result.summary["stage_objective"] = "find_edge_anywhere"
         return result
 
     def baseline_comparison(self, strategy_name: str) -> ResearchToolResult:
@@ -291,6 +417,7 @@ class ResearchToolbox:
             summary={
                 "candidate_count": gate_report.height,
                 "promoted_count": promoted,
+                "stage_objective": "verify_stable_plateau",
             },
             artifacts={"gate_report": gate_report},
         )
@@ -371,6 +498,7 @@ class ResearchToolbox:
             summary={
                 "candidate_count": promoted.height,
                 "mapped_count": detail_df.height,
+                "stage_objective": "check_execution_stress_acceptability",
             },
             artifacts={"detail": detail_df},
         )
@@ -547,6 +675,7 @@ class ResearchToolbox:
             cost_bps=cost_bps,
         )
         aggregate_df = self._aggregate_sweep(detail_df, configs, min_total_signals=min_total_signals)
+        aggregate_df = _annotate_plateau_metrics(aggregate_df, parameter_space=entry.parameter_space)
         summary.update(
             {
                 "ticker_count": len(enriched_frames),
@@ -702,6 +831,11 @@ class ResearchToolbox:
             pl.col("avg_oos_exp_r").alias("avg_test_exp_r"),
             pl.col("pct_positive_windows").alias("pct_positive_oos_windows"),
             pl.col("avg_confidence").alias("avg_test_confidence"),
+            (
+                pl.col("avg_oos_exp_r") * 1000
+                + pl.col("pct_positive_windows") * 100
+                + pl.col("total_oos_signals") / 1000
+            ).alias("discovery_score"),
         ])
         return aggregate_df.sort(["ticker", "direction", "avg_oos_exp_r"], descending=[False, False, True])
 

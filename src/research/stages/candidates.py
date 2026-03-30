@@ -84,6 +84,14 @@ _NON_PARAM_COLUMNS = {
     "avg_confidence",
     "avg_effective_cost_r",
     "median_selected_ratio",
+    "m1_score",
+    "discovery_score",
+    "plateau_neighbor_count",
+    "plateau_positive_neighbors",
+    "plateau_positive_ratio",
+    "plateau_mean_neighbor_exp_r",
+    "plateau_min_neighbor_exp_r",
+    "plateau_score",
 }
 
 

@@ -11,6 +11,7 @@ from src.strategy.compression_breakout import CompressionBreakoutStrategy
 from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
 from src.strategy.jerk_pivot_momentum import JerkPivotMomentumStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
+from src.strategy.market_impulse import MarketImpulseStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 from src.strategy.regime_router import RegimeRouterStrategy
 
@@ -86,6 +87,10 @@ def _build_opening_drive_v2(params: dict[str, Any] | None = None) -> BaseStrateg
 
 
 def _build_jerk_pivot_tight(params: dict[str, Any] | None = None) -> BaseStrategy:
+    cleaned = dict(params or {})
+    # `reward_risk_ratio` is tracked in repo memory for evaluation, but it is not
+    # a constructor argument for the strategy itself.
+    cleaned.pop("reward_risk_ratio", None)
     defaults = {
         "vpoc_proximity_pct": 0.003,
         "jerk_lookback": 10,
@@ -93,7 +98,16 @@ def _build_jerk_pivot_tight(params: dict[str, Any] | None = None) -> BaseStrateg
         "use_volume_filter": True,
         "strategy_label": "Jerk-Pivot Momentum (tight)",
     }
-    return JerkPivotMomentumStrategy(**(defaults | (params or {})))
+    return JerkPivotMomentumStrategy(**(defaults | cleaned))
+
+
+def _build_market_impulse(params: dict[str, Any] | None = None) -> BaseStrategy:
+    defaults = {
+        "entry_buffer_minutes": 3,
+        "entry_window_minutes": 60,
+        "regime_timeframe": "5m",
+    }
+    return MarketImpulseStrategy(**(defaults | (params or {})))
 
 
 _NAMED_BUILDERS: dict[str, StrategyBuilder] = {
@@ -104,6 +118,7 @@ _NAMED_BUILDERS: dict[str, StrategyBuilder] = {
     "Opening Drive Classifier": _build_opening_drive,
     "Opening Drive v2 (Short Continue)": _build_opening_drive_v2,
     "Jerk-Pivot Momentum (tight)": _build_jerk_pivot_tight,
+    "Market Impulse (Cross & Reclaim)": _build_market_impulse,
 }
 
 

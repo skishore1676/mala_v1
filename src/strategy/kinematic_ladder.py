@@ -87,6 +87,14 @@ class KinematicLadderStrategy(BaseStrategy):
             "session_end": self.session_end.isoformat(timespec="minutes"),
         }
 
+    def search_config(self) -> dict[str, Any]:
+        config = self.strategy_config()
+        # When the volume gate is disabled, the multiplier no longer changes the
+        # strategy behavior and should not consume extra search budget.
+        if not self.use_volume_filter:
+            config.pop("volume_multiplier", None)
+        return config
+
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = self.required_features
         missing = required - set(df.columns)

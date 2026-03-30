@@ -51,6 +51,10 @@ class BaseStrategy(ABC):
         """Serializable runtime configuration for registry and orchestration use."""
         return {}
 
+    def search_config(self) -> dict[str, Any]:
+        """Canonical config used to dedupe equivalent research search cells."""
+        return self.strategy_config()
+
     def __repr__(self) -> str:
         return f"<Strategy: {self.name}>"
 

@@ -121,6 +121,15 @@ refactor_validation:
         Validates a different directional feature dependency built around VPOC proximity,
         jerk inflection, and directional evaluation flow.
       minimum_smoke_test: "Instantiates, generates directional signals, completes walk-forward stage."
+    - strategy: "Market Impulse (Cross & Reclaim)"
+      status: candidate
+      representative_tickers: [QQQ, SPY]
+      expected_directions: [short]
+      why_it_matters: >
+        Covers the reusable multi-timeframe path end to end, including parameterized
+        higher-timeframe feature requests, directional intraday entries, and the live
+        deployment bridge now being tested in bhiksha.
+      minimum_smoke_test: "Instantiates, resolves alternate regime timeframes, generates directional signals, completes walk-forward stage."
 
 strategies:
 
@@ -156,20 +165,26 @@ strategies:
       Included in convergence run to evaluate.
 
   "Kinematic Ladder":
-    status: candidate
+    status: dead
     tickers: [TSLA]
     directions: [short]
     optimal_params:
-      regime_window: 20
-      accel_window: 8
+      regime_window: 45
+      accel_window: 20
       use_volume_filter: false
+      volume_multiplier: 1.0
     evidence: >
       P1 ablation (2026-03-09): volume gate kills KL entirely — zero valid cells with volume ON.
-      Without volume filter, TSLA short avg OOS E[R]=+0.22, 100% window hit rate.
-      No edge found for any other ticker even without volume gate.
+      Plateau study (2026-03-30): TSLA short shows a real raw edge region with multiple
+      nearby rw/aw variants surviving M2 and three surviving untouched holdout:
+      rw=45/aw=20, rw=20/aw=12, rw=45/aw=12 (all volume filter OFF).
+      However, M5 execution mapping stayed unacceptable across the full surviving plateau:
+      best base exp(R)=+0.0629, mc_prob_positive_exp≈0.275, mc_exp_r_p50<0.
+      Transfer to AMD/QQQ/NVDA/SPY was weak or negative.
     notes: >
-      TSLA short only, volume filter OFF. Included in convergence run.
-      If gates fail, mark dead. If gates pass, promote to active.
+      Mark dead for active research budgeting: the idea has a weak raw TSLA edge but no
+      acceptable executable edge yet. Keep as provenance only unless a future session
+      changes the execution model or trigger definition materially.
 
   "Jerk-Pivot Momentum (tight)":
     status: candidate
@@ -193,6 +208,30 @@ strategies:
         stress_median_dd: 13.4
       IWM_short: excluded
     last_updated: 2026-03-22
+
+  "Market Impulse (Cross & Reclaim)":
+    status: candidate
+    tickers: [QQQ, SPY]
+    directions: [short]
+    optimal_params:
+      entry_buffer_minutes: 5
+      entry_window_minutes: 60
+      regime_timeframe: 1h
+      vma_col: vma_10
+    evidence: >
+      Agentic multi-symbol run (2026-03-28) across SPY, QQQ, IWM, NVDA, and TSLA found
+      the strongest execution-robust edge in the short-only Market Impulse family.
+      QQQ short with 1h regime, 5-minute entry buffer, and 60-minute window reached
+      M5 with base E[R]=+0.4328, Monte Carlo median E[R]=+0.2068, and stress survival
+      probability 93.6%. SPY short with 1h regime, 3-minute buffer, and 45-minute
+      window also survived M5 with positive stressed expectancy; TSLA short passed
+      holdout but degraded under execution stress.
+    notes: >
+      Keep tracked as candidate until bhiksha live-session reconciliation confirms that
+      the 1-minute bar timing, 1h regime construction, and algorithmic exit behavior
+      match Mala research assumptions. Primary deployment candidates are QQQ short
+      (buffer=5, window=60, regime=1h) and SPY short (buffer=3, window=45, regime=1h).
+    last_updated: 2026-03-30
 
   "Compression Expansion Breakout":
     status: dead

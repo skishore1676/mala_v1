@@ -200,6 +200,52 @@ def test_build_candidate_strategy_prefers_catalog_strategy_params() -> None:
     assert strategy.strategy_config()["volume_multiplier"] == 1.4
 
 
+def test_build_candidate_strategy_ignores_rank_columns() -> None:
+    strategy = build_candidate_strategy(
+        {
+            "ticker": "TSLA",
+            "strategy": "Kinematic Ladder rw=45/aw=20-vol",
+            "direction": "short",
+            "catalog_strategy": "Kinematic Ladder",
+            "regime_window": 45,
+            "accel_window": 20,
+            "use_volume_filter": False,
+            "volume_multiplier": 1.2,
+            "m1_score": 301.0,
+        }
+    )
+
+    assert strategy.name == "Kinematic Ladder rw=45/aw=20-vol"
+    assert strategy.strategy_config()["regime_window"] == 45
+    assert strategy.strategy_config()["accel_window"] == 20
+    assert strategy.strategy_config()["use_volume_filter"] is False
+
+
+def test_build_candidate_strategy_ignores_plateau_rank_columns() -> None:
+    strategy = build_candidate_strategy(
+        {
+            "ticker": "TSLA",
+            "strategy": "Kinematic Ladder rw=30/aw=12-vol",
+            "direction": "short",
+            "catalog_strategy": "Kinematic Ladder",
+            "regime_window": 30,
+            "accel_window": 12,
+            "use_volume_filter": False,
+            "volume_multiplier": 1.0,
+            "discovery_score": 180.0,
+            "plateau_neighbor_count": 8,
+            "plateau_positive_ratio": 1.0,
+            "plateau_min_neighbor_exp_r": 0.083833,
+            "plateau_score": 191.833333,
+        }
+    )
+
+    assert strategy.name == "Kinematic Ladder rw=30/aw=12-vol"
+    assert strategy.strategy_config()["regime_window"] == 30
+    assert strategy.strategy_config()["accel_window"] == 12
+    assert strategy.strategy_config()["use_volume_filter"] is False
+
+
 def test_holdout_helpers(tmp_path) -> None:
     gate_dir = tmp_path / "results"
     gate_dir.mkdir()

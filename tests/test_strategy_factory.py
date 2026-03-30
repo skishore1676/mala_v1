@@ -6,6 +6,7 @@ from src.strategy.base import required_feature_union
 from src.strategy.factory import available_strategy_names, build_strategy, build_strategy_by_name
 from src.strategy.jerk_pivot_momentum import JerkPivotMomentumStrategy
 from src.strategy.kinematic_ladder import KinematicLadderStrategy
+from src.strategy.market_impulse import MarketImpulseStrategy
 from src.strategy.opening_drive_classifier import OpeningDriveClassifierStrategy
 
 
@@ -17,6 +18,15 @@ def test_build_opening_drive_v2_by_name() -> None:
 def test_build_jerk_pivot_tight_by_name() -> None:
     strat = build_strategy_by_name("Jerk-Pivot Momentum (tight)")
     assert strat.name == "Jerk-Pivot Momentum (tight)"
+
+
+def test_build_jerk_pivot_tight_ignores_reward_risk_ratio_override() -> None:
+    strat = build_strategy(
+        "Jerk-Pivot Momentum (tight)",
+        {"reward_risk_ratio": 1.5, "vpoc_proximity_pct": 0.002},
+    )
+    assert strat.name == "Jerk-Pivot Momentum (tight)"
+    assert strat.vpoc_proximity_pct == 0.002
 
 
 def test_build_strategy_with_override_params() -> None:
@@ -31,6 +41,18 @@ def test_available_strategy_names_includes_research_candidates() -> None:
     names = available_strategy_names()
     assert "Jerk-Pivot Momentum (tight)" in names
     assert "Opening Drive v2 (Short Continue)" in names
+    assert "Market Impulse (Cross & Reclaim)" in names
+
+
+def test_build_market_impulse_with_timeframe_override() -> None:
+    strategy = build_strategy(
+        "Market Impulse (Cross & Reclaim)",
+        {"regime_timeframe": "15m", "entry_window_minutes": 90},
+    )
+
+    assert isinstance(strategy, MarketImpulseStrategy)
+    assert strategy.regime_timeframe == "15m"
+    assert strategy.evaluation_mode == "directional"
 
 
 def test_required_feature_union_combines_strategy_dependencies() -> None:

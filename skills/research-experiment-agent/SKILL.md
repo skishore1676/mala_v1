@@ -157,6 +157,30 @@ Execution preference:
 - `M4 / holdout`: verify it survives untouched quarantine data.
 - `M5 / execution mapping`: test whether the edge survives practical execution assumptions.
 
+Stage objective framing:
+
+- `M1` asks: "is there edge anywhere?"
+  - Optimize for honest discovery, not production readiness.
+  - Prefer finding positive regions over over-interpreting one best-looking cell.
+- `M2` asks: "is there a stable plateau?"
+  - Prefer parameter neighborhoods that stay alive across nearby settings and friction assumptions.
+  - Treat razor-thin point optima as warnings unless the surrounding region is also healthy.
+- `M3` asks: "does the chosen region keep adapting out of sample?"
+  - Inspect whether the selected variant keeps working window by window rather than only in aggregate.
+- `M4` asks: "does the frozen candidate survive untouched quarantine data?"
+  - Do not retune here; the point is to measure decay honestly.
+- `M5` asks: "does the distribution remain acceptable after stress?"
+  - A candidate can pass holdout and still fail the practical deployment test.
+
+Parameter search guidance:
+
+- De-duplicate no-op parameter combinations before claiming search coverage.
+- Separate discovery ranking from production judgment:
+  - M1 can rank by edge and coverage,
+  - M2 should emphasize plateau stability,
+  - M5 should emphasize stressed expectancy and drawdown behavior.
+- Prefer stable parameter regions over single best-point winners when recommending the next experiment.
+
 At each stage, optimize for honesty and learning velocity, not for keeping the strategy alive.
 
 ## Good Defaults
