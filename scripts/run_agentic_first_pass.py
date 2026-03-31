@@ -17,6 +17,7 @@ from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
+from src.research.loop_export import LoopArtifactExporter
 from src.research.models import ResearchStage
 from src.research.reporting import ResearchJournal
 from src.research.run_storage import append_strategy_index, create_run_dir
@@ -668,6 +669,7 @@ def main() -> None:
             f"M5={m5_execution.height}"
         ),
     )
+    LoopArtifactExporter().export_runs([out_dir], out_dir=out_dir)
 
 
 if __name__ == "__main__":
