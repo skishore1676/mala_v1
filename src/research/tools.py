@@ -166,7 +166,11 @@ def _annotate_plateau_metrics(
             if is_neighbor and differs:
                 neighbors.append(peer)
 
-        neighbor_exp = [float(item["avg_test_exp_r"]) for item in neighbors if item.get("avg_test_exp_r") is not None]
+        neighbor_exp = [
+            float(item["avg_test_exp_r"])
+            for item in neighbors
+            if item.get("avg_test_exp_r") is not None and np.isfinite(float(item["avg_test_exp_r"]))
+        ]
         positive_neighbors = [value for value in neighbor_exp if value > 0]
         neighbor_count = len(neighbors)
         positive_ratio = (len(positive_neighbors) / neighbor_count) if neighbor_count else 0.0
@@ -800,6 +804,12 @@ class ResearchToolbox:
     ) -> pl.DataFrame:
         if detail_df.is_empty():
             return pl.DataFrame()
+
+        detail_df = detail_df.with_columns([
+            pl.when(pl.col("test_exp_r").is_nan()).then(None).otherwise(pl.col("test_exp_r")).alias("test_exp_r"),
+            pl.when(pl.col("test_confidence").is_nan()).then(None).otherwise(pl.col("test_confidence")).alias("test_confidence"),
+            pl.when(pl.col("effective_cost_r").is_nan()).then(None).otherwise(pl.col("effective_cost_r")).alias("effective_cost_r"),
+        ])
 
         config_cols = [column for column in _config_columns(configs) if column in detail_df.columns]
         context_cols = [

@@ -92,9 +92,9 @@ def _build_jerk_pivot_tight(params: dict[str, Any] | None = None) -> BaseStrateg
     # a constructor argument for the strategy itself.
     cleaned.pop("reward_risk_ratio", None)
     defaults = {
-        "vpoc_proximity_pct": 0.003,
+        "vpoc_proximity_pct": 0.002,
         "jerk_lookback": 10,
-        "volume_multiplier": 1.1,
+        "volume_multiplier": 1.3,
         "use_volume_filter": True,
         "strategy_label": "Jerk-Pivot Momentum (tight)",
     }

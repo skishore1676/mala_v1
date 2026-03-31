@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags
+from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags, stress_profile_library
 
 
 def test_stress_from_win_flags_shapes_and_probabilities() -> None:
@@ -19,3 +19,9 @@ def test_stress_from_empty_returns_zeroes() -> None:
     assert out["trades"] == 0
     assert out["mc_prob_positive_exp"] == 0.0
 
+
+def test_stress_profile_library_includes_named_profiles() -> None:
+    profiles = stress_profile_library(bootstrap_iters=250, random_seed=9)
+    assert {"default", "debit_spread_tight", "single_option", "stock_like"} <= set(profiles)
+    assert profiles["stock_like"].theta_cost_range == (0.0, 0.0)
+    assert profiles["default"].bootstrap_iters == 250

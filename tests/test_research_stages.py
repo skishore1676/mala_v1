@@ -17,6 +17,7 @@ from src.research.stages import (
     cost_r_from_bps,
     cost_tag,
     evaluate_df,
+    execution_profiles_for,
     eval_holdout_direction,
     latest_csv,
     median_selected_ratio,
@@ -361,6 +362,13 @@ def test_execution_stage_helpers() -> None:
 
     mapping = option_mapping_for("Elastic Band Reversion", "short")
     assert mapping["structure"] == "put_debit_spread"
+    assert option_mapping_for("Elastic Band Reversion", "short", "stock_like")["structure"] == "underlying"
+    assert [profile["execution_profile"] for profile in execution_profiles_for("Elastic Band Reversion", "short")] == [
+        "debit_spread_default",
+        "debit_spread_tight",
+        "single_option",
+        "stock_like",
+    ]
 
 
 def test_run_late_stage_helpers_with_real_strategy() -> None:
@@ -449,7 +457,14 @@ def test_run_late_stage_helpers_with_real_strategy() -> None:
         stress_cfg=ExecutionStressConfig(bootstrap_iters=10),
     )
     assert execution_rows
-    assert execution_rows[0]["structure"] == "put_debit_spread"
+    assert len(execution_rows) == 4
+    assert {row["execution_profile"] for row in execution_rows} == {
+        "debit_spread_default",
+        "debit_spread_tight",
+        "single_option",
+        "stock_like",
+    }
+    assert {row["structure"] for row in execution_rows} == {"put_debit_spread", "long_put", "underlying"}
 
 
 def test_run_walk_forward_for_strategies() -> None:

@@ -135,19 +135,25 @@ strategies:
 
   "Elastic Band Reversion":
     status: active
-    tickers: [AAPL, META, TSLA, QQQ, IWM]
+    tickers: [AAPL, META, TSLA, QQQ, IWM, AMD, NVDA]
     directions: [short, combined, long]
     optimal_params:
       # Per-ticker from P0 grid search (z_score_threshold x z_score_window):
       # AAPL: z=2.5-3.0 / w=240-360   | TSLA: z=1.75 / w=120 (100% windows)
       # META: z=1.0-1.25 / w=240-360 (short, 100% windows)
       # QQQ:  z=2.5 / w=360           | IWM: z=2.0 / w=240
-      use_directional_mass: true  # P1 ablation confirms DM is net positive
+      use_directional_mass: true  # P1 ablation confirms DM is net positive overall
     notes: >
       SPY excluded — no edge under any config.
       Convergence pipeline (2026-03-09) promoted 10 parameter/direction variants to holdout.
       Standouts: META short (z=1.0, w=240, E[R]=+0.135, 100% wins); TSLA short (z=1.75, w=120, E[R]=+0.133, 100% wins).
       Holdout Validation (2026-03-09): TSLA short (z=1.25 / w=360) successfully passed extended 3-week untouched holdout with E[R] = +0.51 over 36 signals!
+      Refresh run (2026-03-30): only IWM short (z=2.0 / w=240 / dm=true) survived full M1-M5 staging on the 2024-01-02 to 2026-02-28 window.
+      Holdout stayed positive across all 3 cost points (mean E[R] = +0.1321 over 94 signals), but M5 execution stress remained too weak for deployment
+      (base E[R] = +0.1966, mc_prob_positive_exp = 0.443, mc_exp_r_p50 = -0.0212).
+      Expansion pass (2026-03-30) added two more holdout survivors: AMD short (z=3.0 / w=240 / dm=false)
+      and NVDA long (z=3.0 / w=120 / dm=true). Both survived holdout, but only NVDA remained close to viable in M5;
+      AMD's execution mapping was decisively too weak. PLTR long looked strong in M1/M2 but failed holdout.
 
   "Opening Drive Classifier":
     status: candidate
@@ -161,6 +167,8 @@ strategies:
       volume_multiplier: 1.2
     notes: >
       Short-continue variant showed early promise.
+      2026-03-30 scout: sparse positive cells on QQQ short and IWM short, but only 1 OOS window
+      each, so the strategy still fails the M2 stable-plateau objective.
       Not yet walk-forward OOS validated at sufficient scale.
       Included in convergence run to evaluate.
 
@@ -187,27 +195,41 @@ strategies:
       changes the execution model or trigger definition materially.
 
   "Jerk-Pivot Momentum (tight)":
-    status: candidate
-    tickers: [NVDA]
+    status: under_eval
+    tickers: [TSLA, AMD]
     directions: [short]
     optimal_params:
       vpoc_proximity_pct: 0.002
       jerk_lookback: 10
-      volume_multiplier: 1.2
+      volume_multiplier: 1.3
       use_volume_filter: true
-      reward_risk_ratio: 1.5
+      reward_risk_ratio: 2.0
     evidence: >
-      Tight variant passes walk‑forward convergence and holdout validation (2026‑03‑22). Retune analysis (2026‑03‑22) shows NVDA short with tighter filters (vpoc=0.002, volume_multiplier=1.2, ratio=1.5) yields holdout E[R]=+0.251, stress‑test survival probability ≈60%, median drawdown ≈13.4R. IWM short fails stress tests and is excluded. SPY combined failed holdout (E[R]=‑0.0366) and is excluded.
+      Earlier retune work (2026‑03‑22) favored NVDA short, but a fresh focused stage-framed
+      run on 2026‑03‑30 across NVDA, AMD, TSLA, QQQ, and IWM shifted the best region materially.
+      M2 promoted TSLA short (vpoc=0.002, jerk=10, vol=1.3) and AMD short on the same parameters;
+      NVDA short failed M2 stability. Both promoted candidates then passed untouched holdout:
+      TSLA mean holdout E[R]=+0.8397 over 64 signals, AMD mean holdout E[R]=+0.2288 over 67 signals.
+      Multi-vehicle M5 was especially strong for TSLA short (single_option p50 ≈ +0.743, tight spread p50 ≈ +0.774)
+      and solid for AMD short (single_option p50 ≈ +0.117, tight spread p50 ≈ +0.155).
     notes: >
-      Retuned variant ready for final validation before live testing. Keep this tracked as a candidate so the refactor validation set includes a strategy with different feature dependencies than Elastic Band, Opening Drive, and Kinematic Ladder.
+      Fresh evidence now points to TSLA short as the lead Jerk-Pivot deployment candidate, with AMD short
+      as a secondary survivor. Keep this strategy under active evaluation because it appears materially
+      better aligned with single-leg options than Elastic Band. NVDA short should no longer be treated as
+      the lead tracked expression until it re-proves itself.
     retune_results:
-      NVDA_short:
-        config: vpoc=0.002, volume_multiplier=1.2, ratio=1.5
-        holdout_exp_r: 0.251
-        stress_prob_pos: 0.604
-        stress_median_dd: 13.4
-      IWM_short: excluded
-    last_updated: 2026-03-22
+      TSLA_short:
+        config: vpoc=0.002, jerk_lookback=10, volume_multiplier=1.3, ratio=2.0
+        holdout_exp_r: 0.8397
+        single_option_p50: 0.7433
+        tight_spread_p50: 0.7738
+      AMD_short:
+        config: vpoc=0.002, jerk_lookback=10, volume_multiplier=1.3, ratio=2.0
+        holdout_exp_r: 0.2288
+        single_option_p50: 0.1165
+        tight_spread_p50: 0.1549
+      NVDA_short: m2_fail
+    last_updated: 2026-03-30
 
   "Market Impulse (Cross & Reclaim)":
     status: candidate

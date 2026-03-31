@@ -64,6 +64,8 @@ Every cycle should end with one of four outcomes:
 - Allowed parameter space and evaluation budget.
 - Existing evidence from `research_state.yaml`, `results.db`, and prior artifacts.
 - The callable experiment surface in `src/research/tools.py` and strategy-declared `required_features`.
+- The supported execution contract in `docs/strategy_surface.yaml`.
+- The proposed-surface bridge in `docs/strategy_surface_proposed.yaml`.
 - The script support policy in `scripts/STATUS.md` so you can distinguish the active API-first path from quarantined legacy runners.
 - The tracked ticker scope from `research_state.yaml`; do not silently expand to new symbols without saying why.
 
@@ -87,6 +89,15 @@ Quick examples:
 - A decision: `promote`, `retune`, `gather_more_evidence`, or `kill`.
 - A note for repo memory describing what was learned and what should happen next.
 - A written gate outcome for every stage that was actually run.
+- A surface classification for the explored strategy:
+  - `supported`,
+  - `proposed`,
+  - or `derived/internal`.
+- An execution readiness label:
+  - `fully_executable`,
+  - `research_valid_partially_executable`,
+  - or `research_valid_not_executable`.
+- When the strategy uses a proposed surface, a short Bhiksha capability-gap note.
 
 Gate logging contract:
 
@@ -126,6 +137,11 @@ Execution preference:
 3. Check current state.
    Read the registry and prior evidence to determine the current stage, allowed tickers, known failures, and remaining uncertainty.
 
+   Surface classification:
+   - If the explored knobs fit `docs/strategy_surface.yaml`, treat the run as `supported`.
+   - If the explored knobs materially affect Mala research but Bhiksha cannot execute them yet, treat the run as `proposed` and compare against `docs/strategy_surface_proposed.yaml`.
+   - If a field is merely a derived helper such as a computed column name, do not elevate it into either contract unless Bhiksha consumes it directly.
+
    Default research scope:
    - Start with the tracked tickers for the strategy.
    - If only one ticker is tracked, say that explicitly in the run summary.
@@ -149,6 +165,13 @@ Execution preference:
 9. Write the gate note before moving on.
    Persist the outcome for that stage so another agent can resume without re-deriving the reasoning.
 
+10. Write the surface outcome.
+   Every strategy run must end with one of:
+   - `uses supported surface only`,
+   - `introduces proposed surface`,
+   - `requires Bhiksha capability expansion`.
+   If the run introduces a proposed surface, name the missing Bhiksha capabilities explicitly and reference `docs/strategy_surface_proposed.yaml`.
+
 ## Stage Guidance
 
 - `M1 / discovery`: prove there is an edge anywhere in the allowed search space.
@@ -171,15 +194,32 @@ Stage objective framing:
   - Do not retune here; the point is to measure decay honestly.
 - `M5` asks: "does the distribution remain acceptable after stress?"
   - A candidate can pass holdout and still fail the practical deployment test.
+  - Compare more than one execution vehicle when possible; do not let a single hardcoded options template stand in for all monetization paths.
+  - Separate "bad signal" from "bad vehicle" before killing an otherwise healthy holdout survivor.
 
 Parameter search guidance:
 
 - De-duplicate no-op parameter combinations before claiming search coverage.
+- Do not force discovery to stay inside Bhiksha's current capabilities.
+  - New Mala-first surfaces are allowed when they are honest research knobs.
+  - But they must be labeled as `proposed` rather than silently treated as deployable.
 - Separate discovery ranking from production judgment:
   - M1 can rank by edge and coverage,
   - M2 should emphasize plateau stability,
   - M5 should emphasize stressed expectancy and drawdown behavior.
 - Prefer stable parameter regions over single best-point winners when recommending the next experiment.
+
+Surface guidance:
+
+- `supported` surface:
+  - Bhiksha can execute it today.
+  - Report outcomes using the canonical fields in `docs/strategy_surface.yaml`.
+- `proposed` surface:
+  - Mala may explore it.
+  - Report the research result, the exact new knobs, and the Bhiksha capability gap.
+  - If the user has asked for repo hygiene work, update `docs/strategy_surface_proposed.yaml`.
+- `derived` surface:
+  - Keep it out of research reporting unless it must be mentioned as an internal implementation detail.
 
 At each stage, optimize for honesty and learning velocity, not for keeping the strategy alive.
 

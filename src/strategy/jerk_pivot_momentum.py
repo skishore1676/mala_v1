@@ -91,9 +91,9 @@ class JerkPivotMomentumStrategy(BaseStrategy):
     @property
     def parameter_space(self) -> dict[str, list[Any]]:
         return {
-            "vpoc_proximity_pct": [0.003, 0.005],
-            "jerk_lookback": [10, 20],
-            "volume_multiplier": [1.0, 1.1],
+            "vpoc_proximity_pct": [0.0015, 0.002, 0.003],
+            "jerk_lookback": [8, 10, 12],
+            "volume_multiplier": [1.0, 1.1, 1.2, 1.3],
             "use_volume_filter": [True, False],
         }
 
@@ -113,6 +113,12 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             "session_end": self.session_end.isoformat(timespec="minutes"),
             "strategy_label": self._strategy_label,
         }
+
+    def search_config(self) -> dict[str, Any]:
+        config = self.strategy_config()
+        if not self.use_volume_filter:
+            config.pop("volume_multiplier", None)
+        return config
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = self.required_features

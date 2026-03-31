@@ -2,6 +2,7 @@
 
 from src.research.stages.convergence import build_gate_report, cost_tag, parse_costs
 from src.research.stages.execution import (
+    execution_profiles_for,
     median_selected_ratio,
     option_mapping_for,
     promoted_candidates_from_holdout,
@@ -35,6 +36,7 @@ __all__ = [
     "choose_ratio",
     "evaluate_df",
     "eval_holdout_direction",
+    "execution_profiles_for",
     "latest_csv",
     "median_selected_ratio",
     "option_mapping_for",

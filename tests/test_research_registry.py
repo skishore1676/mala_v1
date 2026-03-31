@@ -218,6 +218,38 @@ def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
     )
 
 
+def test_aggregate_sweep_treats_nan_metrics_as_missing() -> None:
+    detail_df = pl.DataFrame(
+        {
+            "ticker": ["AMD", "AMD"],
+            "strategy": ["Elastic Band Reversion", "Elastic Band Reversion"],
+            "direction": ["long", "long"],
+            "catalog_strategy": ["Elastic Band Reversion", "Elastic Band Reversion"],
+            "base_strategy": ["ElasticBandReversionStrategy", "ElasticBandReversionStrategy"],
+            "z_score_threshold": [2.0, 2.0],
+            "z_score_window": [240, 240],
+            "use_directional_mass": [False, False],
+            "test_signals": [100, 120],
+            "test_exp_r": [float("nan"), 0.25],
+            "test_confidence": [float("nan"), 0.55],
+            "effective_cost_r": [float("nan"), 0.08],
+            "selected_ratio": [2.0, 2.0],
+        }
+    )
+
+    aggregate = ResearchToolbox._aggregate_sweep(
+        detail_df,
+        [{"z_score_threshold": 2.0, "z_score_window": 240, "use_directional_mass": False}],
+        min_total_signals=100,
+    )
+
+    row = aggregate.row(0, named=True)
+    assert row["avg_oos_exp_r"] == 0.25
+    assert row["avg_confidence"] == 0.55
+    assert row["avg_effective_cost_r"] == 0.08
+    assert row["discovery_score"] is not None
+
+
 def test_orchestrator_can_run_allowed_action(tmp_path: Path) -> None:
     state_path = tmp_path / "research_state.yaml"
     _write_state_file(state_path)
@@ -252,6 +284,35 @@ def test_parameter_sweep_dedupes_noop_kinematic_variants() -> None:
     assert result.summary["duplicate_config_count"] == 1
     assert result.summary["config_count"] == 1
     assert len(result.artifacts["configs"]) == 1
+
+
+def test_parameter_sweep_dedupes_noop_jerk_pivot_volume_variants() -> None:
+    toolbox = ResearchToolbox()
+
+    result = toolbox.parameter_sweep(
+        "Jerk-Pivot Momentum (tight)",
+        parameter_space={
+            "vpoc_proximity_pct": [0.002],
+            "jerk_lookback": [10],
+            "volume_multiplier": [1.0, 1.1, 1.2],
+            "use_volume_filter": [False],
+        },
+        max_configs=3,
+        tickers=["NVDA"],
+        ticker_frames={"NVDA": _sample_raw_frame()},
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 5, 31),
+        train_months=2,
+        test_months=1,
+        ratios=[1.0],
+        min_signals=1,
+        cost_r=0.05,
+        min_total_signals=1,
+    )
+
+    assert result.summary["requested_config_count"] == 3
+    assert result.summary["duplicate_config_count"] == 2
+    assert result.summary["config_count"] == 1
 
 
 def test_aggregate_sweep_adds_plateau_metrics() -> None:

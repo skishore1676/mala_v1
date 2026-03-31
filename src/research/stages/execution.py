@@ -8,13 +8,49 @@ import numpy as np
 import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
-from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags
+from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags, stress_profile_library
 from src.oracle.policies import RewardRiskWinCondition
 from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
 from src.time_utils import et_date_expr
 
 
-def option_mapping_for(strategy: str, direction: str) -> dict[str, str]:
+def option_mapping_for(strategy: str, direction: str, profile_name: str = "default") -> dict[str, str]:
+    if profile_name == "stock_like":
+        return {
+            "structure": "underlying",
+            "dte": "n/a",
+            "delta_plan": "n/a",
+            "entry_window_et": "signal bar",
+            "profit_take": "rule-based exit",
+            "risk_rule": "underlying stop / target",
+        }
+    if profile_name == "single_option":
+        if direction == "long":
+            return {
+                "structure": "long_call",
+                "dte": "7-21",
+                "delta_plan": "0.35-0.55",
+                "entry_window_et": "09:45-14:30",
+                "profit_take": "50-90% premium",
+                "risk_rule": "hard stop at -35% premium",
+            }
+        return {
+            "structure": "long_put",
+            "dte": "7-21",
+            "delta_plan": "0.35-0.55",
+            "entry_window_et": "09:45-14:30",
+            "profit_take": "50-90% premium",
+            "risk_rule": "hard stop at -35% premium",
+        }
+    if strategy == "Elastic Band Reversion" and direction == "short" and profile_name == "debit_spread_tight":
+        return {
+            "structure": "put_debit_spread",
+            "dte": "7-14",
+            "delta_plan": "long 0.40-0.50 / short 0.20-0.30",
+            "entry_window_et": "09:45-15:00",
+            "profit_take": "65-85% spread value",
+            "risk_rule": "hard stop at -45% premium",
+        }
     if strategy == "Elastic Band Reversion" and direction == "short":
         return {
             "structure": "put_debit_spread",
@@ -50,6 +86,17 @@ def option_mapping_for(strategy: str, direction: str) -> dict[str, str]:
         "profit_take": "50-70% spread value",
         "risk_rule": "hard stop at -45% premium",
     }
+
+
+def execution_profiles_for(strategy: str, direction: str) -> list[dict[str, str]]:
+    if direction == "combined":
+        return []
+    return [
+        {"execution_profile": "debit_spread_default", "stress_profile": "default"},
+        {"execution_profile": "debit_spread_tight", "stress_profile": "debit_spread_tight"},
+        {"execution_profile": "single_option", "stress_profile": "single_option"},
+        {"execution_profile": "stock_like", "stress_profile": "stock_like"},
+    ]
 
 
 def promoted_candidates_from_holdout(holdout_summary: pl.DataFrame) -> pl.DataFrame:
@@ -93,6 +140,10 @@ def run_execution_mapping_for_candidates(
     stress_cfg: ExecutionStressConfig,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    stress_profiles = stress_profile_library(
+        bootstrap_iters=stress_cfg.bootstrap_iters,
+        random_seed=stress_cfg.random_seed,
+    )
 
     for candidate in promoted.iter_rows(named=True):
         ticker = candidate["ticker"]
@@ -134,26 +185,30 @@ def run_execution_mapping_for_candidates(
         p = policy.confidence(mfe, mae)
         base_exp_r = policy.expectancy(mfe, mae, base_cost_r)
 
-        stress = stress_from_win_flags(
-            win_flags=wins,
-            ratio=selected_ratio,
-            config=stress_cfg,
-        )
-        mapping = option_mapping_for(strategy_name, direction)
+        for profile in execution_profiles_for(strategy_name, direction):
+            stress_name = profile["stress_profile"]
+            stress = stress_from_win_flags(
+                win_flags=wins,
+                ratio=selected_ratio,
+                config=stress_profiles[stress_name],
+            )
+            mapping = option_mapping_for(strategy_name, direction, profile["execution_profile"])
 
-        rows.append(
-            {
-                "ticker": ticker,
-                "strategy": strategy_name,
-                "direction": direction,
-                **candidate_context,
-                "selected_ratio": selected_ratio,
-                "holdout_trades": int(len(wins)),
-                "holdout_win_rate": round(p, 4),
-                "base_exp_r": round(base_exp_r, 4),
-                **{k: round(v, 6) if isinstance(v, float) else v for k, v in stress.items()},
-                **mapping,
-            }
-        )
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "strategy": strategy_name,
+                    "direction": direction,
+                    **candidate_context,
+                    "execution_profile": profile["execution_profile"],
+                    "stress_profile": stress_name,
+                    "selected_ratio": selected_ratio,
+                    "holdout_trades": int(len(wins)),
+                    "holdout_win_rate": round(p, 4),
+                    "base_exp_r": round(base_exp_r, 4),
+                    **{k: round(v, 6) if isinstance(v, float) else v for k, v in stress.items()},
+                    **mapping,
+                }
+            )
 
     return rows

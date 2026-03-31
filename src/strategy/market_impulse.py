@@ -20,6 +20,7 @@ Time filter:
 
 from __future__ import annotations
 
+import re
 from datetime import time
 from typing import Any, Optional
 
@@ -39,16 +40,21 @@ class MarketImpulseStrategy(BaseStrategy):
         entry_window_minutes: int = 60,
         market_open_hour: int = 9,
         market_open_minute: int = 30,
-        vma_col: str = "vma_10",
+        vma_col: str | None = None,
         regime_timeframe: str = "5m",
         regime_col: str | None = None,
+        vma_length: int | None = None,
     ) -> None:
         self.entry_buffer_minutes = entry_buffer_minutes
         self.entry_window_minutes = entry_window_minutes
         self.market_open = time(market_open_hour, market_open_minute)
-        self.vma_col = vma_col
-        self.regime_timeframe = regime_timeframe
-        self.regime_col = regime_col or f"impulse_regime_{regime_timeframe}"
+        self.vma_length = _resolve_vma_length(vma_length=vma_length, vma_col=vma_col)
+        self.vma_col = vma_col or f"vma_{self.vma_length}"
+        self.regime_timeframe = _resolve_regime_timeframe(
+            regime_timeframe=regime_timeframe,
+            regime_col=regime_col,
+        )
+        self.regime_col = regime_col or f"impulse_regime_{self.regime_timeframe}"
 
         # Compute the valid entry window bounds
         open_minutes = market_open_hour * 60 + market_open_minute
@@ -88,9 +94,8 @@ class MarketImpulseStrategy(BaseStrategy):
             "entry_window_minutes": self.entry_window_minutes,
             "market_open_hour": self.market_open.hour,
             "market_open_minute": self.market_open.minute,
-            "vma_col": self.vma_col,
+            "vma_length": self.vma_length,
             "regime_timeframe": self.regime_timeframe,
-            "regime_col": self.regime_col,
         }
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -182,3 +187,21 @@ class MarketImpulseStrategy(BaseStrategy):
             f"<MarketImpulseStrategy window={self._entry_start}-{self._entry_end} "
             f"vma={self.vma_col} regime={self.regime_col}>"
         )
+
+
+def _resolve_vma_length(*, vma_length: int | None, vma_col: str | None) -> int:
+    if vma_length is not None:
+        return int(vma_length)
+    if vma_col:
+        match = re.fullmatch(r"vma_(\d+)", vma_col)
+        if match:
+            return int(match.group(1))
+    return 10
+
+
+def _resolve_regime_timeframe(*, regime_timeframe: str, regime_col: str | None) -> str:
+    if regime_col and regime_timeframe == "5m":
+        match = re.fullmatch(r"impulse_regime_(.+)", regime_col)
+        if match:
+            return match.group(1)
+    return regime_timeframe

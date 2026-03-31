@@ -18,6 +18,42 @@ class ExecutionStressConfig:
     random_seed: int = 7
 
 
+def stress_profile_library(*, bootstrap_iters: int = 5000, random_seed: int = 7) -> dict[str, ExecutionStressConfig]:
+    return {
+        "default": ExecutionStressConfig(
+            bootstrap_iters=bootstrap_iters,
+            random_seed=random_seed,
+        ),
+        "debit_spread_tight": ExecutionStressConfig(
+            bootstrap_iters=bootstrap_iters,
+            win_fill_range=(0.82, 1.00),
+            loss_slip_range=(1.00, 1.18),
+            theta_cost_range=(0.01, 0.06),
+            fee_cost_range=(0.01, 0.03),
+            capture_mult_range=(0.90, 1.12),
+            random_seed=random_seed,
+        ),
+        "single_option": ExecutionStressConfig(
+            bootstrap_iters=bootstrap_iters,
+            win_fill_range=(0.78, 1.00),
+            loss_slip_range=(1.00, 1.22),
+            theta_cost_range=(0.015, 0.08),
+            fee_cost_range=(0.01, 0.03),
+            capture_mult_range=(0.88, 1.18),
+            random_seed=random_seed,
+        ),
+        "stock_like": ExecutionStressConfig(
+            bootstrap_iters=bootstrap_iters,
+            win_fill_range=(0.97, 1.00),
+            loss_slip_range=(1.00, 1.03),
+            theta_cost_range=(0.0, 0.0),
+            fee_cost_range=(0.0, 0.01),
+            capture_mult_range=(0.98, 1.02),
+            random_seed=random_seed,
+        ),
+    }
+
+
 def stress_from_win_flags(
     win_flags: np.ndarray,
     ratio: float,
@@ -105,3 +141,5 @@ def stress_from_win_flags(
         "mc_max_dd_p50": float(np.quantile(max_dd, 0.50)),
     }
 
+
+__all__ = ["ExecutionStressConfig", "stress_from_win_flags", "stress_profile_library"]

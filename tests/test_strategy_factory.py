@@ -18,6 +18,8 @@ def test_build_opening_drive_v2_by_name() -> None:
 def test_build_jerk_pivot_tight_by_name() -> None:
     strat = build_strategy_by_name("Jerk-Pivot Momentum (tight)")
     assert strat.name == "Jerk-Pivot Momentum (tight)"
+    assert strat.vpoc_proximity_pct == 0.002
+    assert strat.volume_multiplier == 1.3
 
 
 def test_build_jerk_pivot_tight_ignores_reward_risk_ratio_override() -> None:
@@ -47,12 +49,39 @@ def test_available_strategy_names_includes_research_candidates() -> None:
 def test_build_market_impulse_with_timeframe_override() -> None:
     strategy = build_strategy(
         "Market Impulse (Cross & Reclaim)",
-        {"regime_timeframe": "15m", "entry_window_minutes": 90},
+        {"regime_timeframe": "15m", "entry_window_minutes": 90, "vma_length": 20},
     )
 
     assert isinstance(strategy, MarketImpulseStrategy)
     assert strategy.regime_timeframe == "15m"
+    assert strategy.vma_length == 20
     assert strategy.evaluation_mode == "directional"
+
+
+def test_market_impulse_strategy_config_uses_canonical_fields() -> None:
+    strategy = MarketImpulseStrategy(vma_length=12, regime_timeframe="30m")
+
+    assert strategy.strategy_config() == {
+        "entry_buffer_minutes": 3,
+        "entry_window_minutes": 60,
+        "market_open_hour": 9,
+        "market_open_minute": 30,
+        "vma_length": 12,
+        "regime_timeframe": "30m",
+    }
+
+
+def test_market_impulse_accepts_legacy_internal_field_names() -> None:
+    strategy = build_strategy(
+        "Market Impulse (Cross & Reclaim)",
+        {"vma_col": "vma_20", "regime_col": "impulse_regime_1h"},
+    )
+
+    assert isinstance(strategy, MarketImpulseStrategy)
+    assert strategy.vma_length == 20
+    assert strategy.regime_timeframe == "1h"
+    assert strategy.strategy_config()["vma_length"] == 20
+    assert strategy.strategy_config()["regime_timeframe"] == "1h"
 
 
 def test_required_feature_union_combines_strategy_dependencies() -> None:
