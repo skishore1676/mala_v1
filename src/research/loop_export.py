@@ -138,6 +138,8 @@ _M5_METRIC_FIELDS = {
     "entry_window_et",
     "profit_take",
     "risk_rule",
+    "execution_profile",
+    "stress_profile",
 }
 
 _M4_SUMMARY_METRIC_FIELDS = {

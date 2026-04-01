@@ -31,8 +31,8 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
             "QQQ,Market Impulse (Cross & Reclaim),short,5,60,1h,5.0,2.0,595,0.0533,117,0.5043,0.4323,true\n",
             "QQQ,Market Impulse (Cross & Reclaim),short,5,60,1h,8.0,2.0,595,0.0197,117,0.5043,0.3839,true\n",
         ],
-        m5_detail_header="ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
-        m5_detail_row="QQQ,Market Impulse (Cross & Reclaim),short,5,60,1h,2.0,117,0.5043,0.4328,117.0,0.205046,-0.016752,0.206823,0.425053,0.936,-1.960005,24.198289,49.73124,10.485098,put_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
+        m5_detail_header="ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,execution_profile,stress_profile,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
+        m5_detail_row="QQQ,Market Impulse (Cross & Reclaim),short,5,60,1h,single_option,single_option,2.0,117,0.5043,0.4328,117.0,0.205046,-0.016752,0.206823,0.425053,0.936,-1.960005,24.198289,49.73124,10.485098,put_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
     )
     _write_run(
         elastic_run,
@@ -84,6 +84,8 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     assert market_candidate["manifest"]["execution"]["profile"] == "single_leg_long_premium_v1"
     assert market_candidate["manifest"]["execution"]["shadow_only"] is True
     assert market_candidate["manifest"]["source"]["metadata"]["candidate_id"] == market_candidate["candidate_id"]
+    assert "execution_profile" not in market_candidate["manifest"]["strategy"]["params"]
+    assert "stress_profile" not in market_candidate["manifest"]["strategy"]["params"]
 
     elastic_candidate = next(
         candidate for candidate in candidates_payload["candidates"] if candidate["strategy_key"] == "elastic_band_reversion"
