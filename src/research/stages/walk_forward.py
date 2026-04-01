@@ -81,12 +81,19 @@ def evaluate_df(
             "signals": 0,
             "confidence": None,
             "exp_r": None,
+            "avg_mfe_mae_ratio": None,
             "effective_cost_r": None,
             "evaluation_window": resolved_window,
         }
 
     mfe = base[mfe_col].to_numpy()
     mae = base[mae_col].to_numpy()
+    valid_ratio_mask = np.isfinite(mfe) & np.isfinite(mae) & (mae > 0)
+    avg_mfe_mae_ratio = (
+        round(float(np.mean(mfe[valid_ratio_mask] / mae[valid_ratio_mask])), 4)
+        if np.any(valid_ratio_mask)
+        else None
+    )
 
     if cost_bps is not None:
         avg_mae_d = float(np.mean(mae))
@@ -100,6 +107,7 @@ def evaluate_df(
         "signals": len(mfe),
         "confidence": round(p, 4),
         "exp_r": round(exp_r, 4),
+        "avg_mfe_mae_ratio": avg_mfe_mae_ratio,
         "effective_cost_r": round(effective_cost_r, 5),
         "evaluation_window": resolved_window,
     }
@@ -200,6 +208,7 @@ def run_walk_forward_for_strategies(
                         "test_signals": test_n,
                         "test_confidence": test_stats["confidence"],
                         "test_exp_r": test_stats["exp_r"],
+                        "test_avg_mfe_mae_ratio": test_stats.get("avg_mfe_mae_ratio"),
                         "effective_cost_r": test_stats.get("effective_cost_r"),
                     }
                 )
@@ -209,14 +218,19 @@ def run_walk_forward_for_strategies(
 
 def aggregate_walk_forward(rows: list[dict[str, object]]) -> pl.DataFrame:
     out_df = pl.DataFrame(rows)
+    agg_exprs = [
+        pl.len().alias("oos_windows"),
+        pl.col("test_signals").sum().alias("oos_signals"),
+        pl.col("test_exp_r").drop_nans().mean().alias("avg_test_exp_r"),
+        (pl.col("test_exp_r").drop_nans() > 0).mean().alias("pct_positive_oos_windows"),
+        pl.col("test_confidence").drop_nans().mean().alias("avg_test_confidence"),
+    ]
+    if "test_avg_mfe_mae_ratio" in out_df.columns:
+        agg_exprs.append(
+            pl.col("test_avg_mfe_mae_ratio").drop_nans().mean().alias("avg_test_mfe_mae_ratio")
+        )
     return (
         out_df.group_by(["ticker", "strategy", "direction"])
-        .agg([
-            pl.len().alias("oos_windows"),
-            pl.col("test_signals").sum().alias("oos_signals"),
-            pl.col("test_exp_r").drop_nans().mean().alias("avg_test_exp_r"),
-            (pl.col("test_exp_r").drop_nans() > 0).mean().alias("pct_positive_oos_windows"),
-            pl.col("test_confidence").drop_nans().mean().alias("avg_test_confidence"),
-        ])
+        .agg(agg_exprs)
         .sort(["pct_positive_oos_windows", "avg_test_exp_r"], descending=[True, True])
     )

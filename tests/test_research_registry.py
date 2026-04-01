@@ -134,8 +134,16 @@ def test_orchestrator_exposes_next_actions(tmp_path: Path) -> None:
     orchestrator = ResearchOrchestrator(state_path)
     actions = orchestrator.next_actions(ResearchStage.M2_CONVERGENCE)
 
-    assert [action.action for action in actions] == ["convergence_grid", "ablation_check"]
-    assert [action.tool_name for action in actions] == ["convergence_grid", "ablation_check"]
+    assert [action.action for action in actions] == [
+        "convergence_grid",
+        "ablation_check",
+        "evaluate_config",
+    ]
+    assert [action.tool_name for action in actions] == [
+        "convergence_grid",
+        "ablation_check",
+        "evaluate_config",
+    ]
     assert all(action.agent_can_run for action in actions)
 
 
@@ -150,6 +158,7 @@ def test_orchestrator_exposes_toolbox(tmp_path: Path) -> None:
     assert toolbox.available_tools(ResearchStage.M1_DISCOVERY) == [
         "parameter_sweep",
         "baseline_comparison",
+        "evaluate_config",
     ]
 
 
@@ -216,6 +225,48 @@ def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
     assert {"oos_signals", "avg_test_exp_r", "pct_positive_oos_windows", "avg_test_confidence"} <= set(
         result.artifacts["aggregate"].columns
     )
+
+
+def test_catalog_entry_exposes_search_spec_and_inactive_parameter_rules(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+    entry = registry.catalog_entry("Kinematic Ladder")
+
+    assert entry.search_spec is not None
+    assert [parameter.name for parameter in entry.search_spec.parameters][:2] == [
+        "regime_window",
+        "accel_window",
+    ]
+    assert entry.search_spec.objective is not None
+    assert entry.search_spec.objective.primary_metric == "avg_test_exp_r"
+
+    normalized = entry.search_spec.normalize_config(
+        {"use_volume_filter": False, "volume_multiplier": 1.2},
+        base_config=entry.strategy_config,
+    )
+
+    assert normalized.valid
+    assert normalized.inactive_parameters == ["volume_multiplier"]
+    assert "volume_multiplier" not in normalized.config
+
+
+def test_search_spec_rejects_structurally_invalid_combinations(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+    entry = registry.catalog_entry("Market Impulse (Cross & Reclaim)")
+    assert entry.search_spec is not None
+
+    normalized = entry.search_spec.normalize_config(
+        {"entry_buffer_minutes": 45, "entry_window_minutes": 5},
+        base_config=entry.strategy_config,
+    )
+
+    assert not normalized.valid
+    assert any("Monotonic ordering violated" in error for error in normalized.errors)
 
 
 def test_aggregate_sweep_treats_nan_metrics_as_missing() -> None:
@@ -402,3 +453,160 @@ def test_toolbox_convergence_grid_returns_report(tmp_path: Path) -> None:
 
     assert result.summary["promoted_count"] == 1
     assert result.artifacts["gate_report"].row(0, named=True)["decision"] == "promote_to_holdout"
+
+
+def test_toolbox_evaluate_config_runs_single_point_and_returns_optimizer_payload(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+    toolbox = ResearchToolbox(state_path, results_db_path=tmp_path / "research_results.db")
+
+    result = toolbox.evaluate_config(
+        "Elastic Band Reversion",
+        config={
+            "z_score_threshold": 1.0,
+            "z_score_window": 120,
+            "kinematic_periods_back": 1,
+            "use_directional_mass": False,
+        },
+        tickers=["META"],
+        ticker_frames={"META": _sample_raw_frame()},
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 5, 31),
+        train_months=2,
+        test_months=1,
+        ratios=[1.0],
+        min_signals=1,
+        cost_r=0.05,
+        min_total_signals=1,
+    )
+
+    assert result.summary["status"] in {"ok", "insufficient_signals"}
+    assert result.summary["already_evaluated"] is False
+    assert result.summary["config_signature"]
+    assert result.summary["objective"]["primary_metric"] == "avg_test_exp_r"
+    assert "total_signals" in result.summary["constraints"]
+    assert result.summary["runtime_seconds"] >= 0.0
+    assert isinstance(result.artifacts["detail"], pl.DataFrame)
+    assert isinstance(result.artifacts["aggregate"], pl.DataFrame)
+
+
+def test_toolbox_evaluate_config_short_circuits_duplicates(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+    toolbox = ResearchToolbox(state_path, results_db_path=tmp_path / "research_results.db")
+    kwargs = {
+        "strategy_name": "Elastic Band Reversion",
+        "config": {
+            "z_score_threshold": 1.0,
+            "z_score_window": 120,
+            "kinematic_periods_back": 1,
+            "use_directional_mass": False,
+        },
+        "tickers": ["META"],
+        "ticker_frames": {"META": _sample_raw_frame()},
+        "start_date": date(2025, 1, 1),
+        "end_date": date(2025, 5, 31),
+        "train_months": 2,
+        "test_months": 1,
+        "ratios": [1.0],
+        "min_signals": 1,
+        "cost_r": 0.05,
+        "min_total_signals": 1,
+    }
+
+    first = toolbox.evaluate_config(**kwargs)
+    second = toolbox.evaluate_config(**kwargs)
+
+    assert first.summary["status"] in {"ok", "insufficient_signals"}
+    assert second.summary["status"] == "duplicate"
+    assert second.summary["already_evaluated"] is True
+    assert second.summary["config_signature"] == first.summary["config_signature"]
+
+
+def test_toolbox_compact_memory_queries_summarize_without_dumping_history(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+    toolbox = ResearchToolbox(state_path, results_db_path=tmp_path / "research_results.db")
+
+    shared_kwargs = {
+        "strategy_name": "Elastic Band Reversion",
+        "tickers": ["META"],
+        "ticker_frames": {"META": _sample_raw_frame()},
+        "start_date": date(2025, 1, 1),
+        "end_date": date(2025, 5, 31),
+        "train_months": 2,
+        "test_months": 1,
+        "ratios": [1.0],
+        "min_signals": 1,
+        "cost_r": 0.05,
+        "min_total_signals": 1,
+    }
+    configs = [
+        {"z_score_threshold": 1.0, "z_score_window": 120, "kinematic_periods_back": 1, "use_directional_mass": False},
+        {"z_score_threshold": 1.25, "z_score_window": 120, "kinematic_periods_back": 1, "use_directional_mass": False},
+        {"z_score_threshold": 1.75, "z_score_window": 120, "kinematic_periods_back": 1, "use_directional_mass": True},
+    ]
+    for config in configs:
+        toolbox.evaluate_config(config=config, **shared_kwargs)
+
+    incumbent = toolbox.query_incumbent("Elastic Band Reversion", ticker="META")
+    neighborhood = toolbox.query_neighborhood(
+        "Elastic Band Reversion",
+        {"z_score_threshold": 1.25, "z_score_window": 120, "kinematic_periods_back": 1, "use_directional_mass": False},
+        radius=1,
+        limit=3,
+    )
+    pareto = toolbox.query_pareto_front("Elastic Band Reversion", ticker="META", limit=3)
+
+    assert incumbent.summary["status"] == "ok"
+    assert incumbent.summary["evaluated_configs"] >= 1
+    assert set(incumbent.summary["incumbent"]) >= {"config_signature", "config", "objective", "constraints"}
+    assert neighborhood.summary["status"] == "ok"
+    assert len(neighborhood.summary["neighbors"]) >= 1
+    assert pareto.summary["status"] == "ok"
+    assert pareto.summary["front_size"] >= 1
+
+
+def test_query_dead_zones_returns_compact_failure_summary(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+    toolbox = ResearchToolbox(state_path, results_db_path=tmp_path / "research_results.db")
+
+    shared_kwargs = {
+        "strategy_name": "Elastic Band Reversion",
+        "tickers": ["META"],
+        "ticker_frames": {"META": _sample_raw_frame()},
+        "start_date": date(2025, 1, 1),
+        "end_date": date(2025, 5, 31),
+        "train_months": 2,
+        "test_months": 1,
+        "ratios": [1.0],
+        "min_signals": 1,
+        "cost_r": 0.05,
+        "min_total_signals": 10_000,
+    }
+    toolbox.evaluate_config(
+        config={
+            "z_score_threshold": 1.0,
+            "z_score_window": 120,
+            "kinematic_periods_back": 1,
+            "use_directional_mass": False,
+        },
+        **shared_kwargs,
+    )
+    second_kwargs = dict(shared_kwargs)
+    second_kwargs["end_date"] = date(2025, 6, 30)
+    toolbox.evaluate_config(
+        config={
+            "z_score_threshold": 1.25,
+            "z_score_window": 120,
+            "kinematic_periods_back": 1,
+            "use_directional_mass": False,
+        },
+        **second_kwargs,
+    )
+
+    dead_zones = toolbox.query_dead_zones("Elastic Band Reversion", ticker="META")
+
+    assert dead_zones.summary["status"] == "ok"
+    assert any(zone["parameter"] == "use_directional_mass" for zone in dead_zones.summary["dead_zones"])

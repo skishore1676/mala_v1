@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from hashlib import sha256
 from itertools import product
 import json
+from math import isfinite
+from time import perf_counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -17,7 +20,8 @@ from src.chronos.storage import LocalStorage
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
-from src.research.models import ResearchStage, StrategyCatalogEntry
+from src.oracle.results_db import ResultsDB
+from src.research.models import ResearchStage, StrategyCatalogEntry, StrategySearchSpec
 from src.research.registry import ResearchRegistry
 from src.research.stages import (
     aggregate_walk_forward,
@@ -81,8 +85,84 @@ def _freeze_for_signature(value: Any) -> Any:
     return value
 
 
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in sorted(value.items())}
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _stable_signature(payload: Any) -> str:
+    canonical = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"), default=str)
+    return sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def _strategy_signature(strategy: BaseStrategy) -> tuple[str, Any]:
     return (strategy.__class__.__name__, _freeze_for_signature(strategy.search_config()))
+
+
+def _normalize_strategy_config(
+    entry: StrategyCatalogEntry,
+    config: dict[str, Any],
+    *,
+    validate_values: bool = True,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    search_spec = entry.search_spec
+    if search_spec is None:
+        normalized = dict(entry.strategy_config)
+        normalized.update(config)
+        return normalized, [], []
+    normalized_result = search_spec.normalize_config(
+        config,
+        base_config=entry.strategy_config,
+        validate_values=validate_values,
+    )
+    return (
+        normalized_result.config,
+        normalized_result.inactive_parameters,
+        normalized_result.errors,
+    )
+
+
+def _resolve_domain_index(search_spec: StrategySearchSpec | None, parameter: str, value: Any) -> int | None:
+    if search_spec is None:
+        return None
+    parameter_map = search_spec.parameter_map()
+    spec = parameter_map.get(parameter)
+    if spec is None:
+        return None
+    legal_values = spec.legal_values()
+    try:
+        return legal_values.index(value)
+    except ValueError:
+        return None
+
+
+def _config_distance(
+    search_spec: StrategySearchSpec | None,
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> int:
+    if search_spec is None:
+        return 0 if left == right else 1
+    distance = 0
+    for parameter in search_spec.parameters:
+        left_value = left.get(parameter.name)
+        right_value = right.get(parameter.name)
+        if left_value == right_value:
+            continue
+        left_index = _resolve_domain_index(search_spec, parameter.name, left_value)
+        right_index = _resolve_domain_index(search_spec, parameter.name, right_value)
+        if left_index is None or right_index is None:
+            distance += 1
+            continue
+        distance += abs(left_index - right_index)
+    return distance
 
 
 def _dedupe_strategy_variants(
@@ -200,15 +280,21 @@ def _annotate_plateau_metrics(
 class ResearchToolbox:
     """Python-callable tools that an experiment agent can invoke directly."""
 
-    def __init__(self, state_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        state_path: Path | None = None,
+        *,
+        results_db_path: Path | None = None,
+    ) -> None:
         self.registry = ResearchRegistry(state_path)
         self._storage = LocalStorage()
         self._physics = PhysicsEngine()
+        self._results_db = ResultsDB(db_path=results_db_path)
 
     def available_tools(self, stage: ResearchStage) -> list[str]:
         stage_tools = {
-            ResearchStage.M1_DISCOVERY: ["parameter_sweep", "baseline_comparison"],
-            ResearchStage.M2_CONVERGENCE: ["convergence_grid", "ablation_check"],
+            ResearchStage.M1_DISCOVERY: ["parameter_sweep", "baseline_comparison", "evaluate_config"],
+            ResearchStage.M2_CONVERGENCE: ["convergence_grid", "ablation_check", "evaluate_config"],
             ResearchStage.M3_WALK_FORWARD: ["walk_forward"],
             ResearchStage.M4_HOLDOUT: ["holdout_validation"],
             ResearchStage.M5_EXECUTION: ["execution_mapping"],
@@ -246,9 +332,21 @@ class ResearchToolbox:
     ) -> ResearchToolResult:
         entry = self.registry.catalog_entry(strategy_name)
         sweep_space = parameter_space or entry.parameter_space
-        configs = _bounded_param_grid(sweep_space, max_configs=max_configs)
+        raw_configs = _bounded_param_grid(sweep_space, max_configs=max_configs)
+        requested_config_count = len(raw_configs)
+        configs: list[dict[str, Any]] = []
+        invalid_config_count = 0
+        for raw_config in raw_configs:
+            normalized_config, _, errors = _normalize_strategy_config(
+                entry,
+                raw_config,
+                validate_values=False,
+            )
+            if errors:
+                invalid_config_count += 1
+                continue
+            configs.append(normalized_config)
         strategies = [self.registry.build(strategy_name, params) for params in configs]
-        requested_config_count = len(configs)
         configs, strategies, duplicate_config_count = _dedupe_strategy_variants(configs, strategies)
 
         result = self._strategy_sweep_result(
@@ -274,6 +372,7 @@ class ResearchToolbox:
         result.summary["parameter_count"] = len(sweep_space)
         result.summary["requested_config_count"] = requested_config_count
         result.summary["duplicate_config_count"] = duplicate_config_count
+        result.summary["invalid_config_count"] = invalid_config_count
         result.summary["stage_objective"] = "find_edge_anywhere"
         return result
 
@@ -305,6 +404,299 @@ class ResearchToolbox:
             artifacts={"comparisons": comparisons},
         )
 
+    def evaluate_config(
+        self,
+        strategy_name: str,
+        config: dict[str, Any],
+        *,
+        tickers: list[str] | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        train_months: int = 6,
+        test_months: int = 3,
+        ratios: list[float] | None = None,
+        min_signals: int = 20,
+        cost_r: float | None = None,
+        cost_bps: float | None = None,
+        evaluation_window: int | None = None,
+        min_total_signals: int | None = None,
+        ticker_frames: dict[str, pl.DataFrame] | None = None,
+        metrics: MetricsCalculator | None = None,
+    ) -> ResearchToolResult:
+        entry = self.registry.catalog_entry(strategy_name)
+        normalized_config, inactive_parameters, errors = _normalize_strategy_config(entry, config)
+        config_signature = _stable_signature(
+            {"strategy": strategy_name, "config": normalized_config}
+        )
+        slice_payload = {
+            "tickers": sorted(tickers or sorted(ticker_frames or {})),
+            "start_date": start_date.isoformat() if start_date is not None else None,
+            "end_date": end_date.isoformat() if end_date is not None else None,
+            "train_months": train_months,
+            "test_months": test_months,
+            "ratios": ratios or [1.0, 1.25, 1.5, 2.0],
+            "min_signals": min_signals,
+            "min_total_signals": min_total_signals,
+            "cost_r": cost_r,
+            "cost_bps": cost_bps,
+            "evaluation_window": evaluation_window,
+        }
+        request_signature = _stable_signature(
+            {"strategy": strategy_name, "config_signature": config_signature, "slice": slice_payload}
+        )
+        existing = self._results_db.fetch_research_evaluation(request_signature)
+        if existing is not None:
+            duplicate_payload = dict(existing)
+            duplicate_payload["status"] = "duplicate"
+            duplicate_payload["already_evaluated"] = True
+            duplicate_payload["request_signature"] = request_signature
+            return ResearchToolResult(
+                tool_name="evaluate_config",
+                summary=duplicate_payload,
+                artifacts={"cached_result": existing},
+            )
+
+        status = "ok"
+        if errors:
+            status = "invalid"
+        elif not self._has_execution_request(tickers, ticker_frames, start_date, end_date):
+            status = "invalid"
+            errors.append("Point evaluation requires tickers and an explicit date range")
+
+        if status == "invalid":
+            payload = self._build_evaluation_payload(
+                strategy_name=strategy_name,
+                normalized_config=normalized_config,
+                config_signature=config_signature,
+                request_signature=request_signature,
+                status=status,
+                inactive_parameters=inactive_parameters,
+                slice_payload=slice_payload,
+                objective={},
+                constraints={
+                    "total_signals": 0,
+                    "minimum_signals": min_total_signals or min_signals,
+                    "passes_signal_floor": False,
+                    "insufficiency_flags": ["invalid_config"],
+                },
+                runtime_seconds=0.0,
+                errors=errors,
+            )
+            self._results_db.store_research_evaluation(payload)
+            return ResearchToolResult(tool_name="evaluate_config", summary=payload)
+
+        assert start_date is not None
+        assert end_date is not None
+        ratios = ratios or [1.0, 1.25, 1.5, 2.0]
+        metrics = metrics or MetricsCalculator()
+        strategy = self.registry.build(strategy_name, normalized_config)
+        runtime_start = perf_counter()
+        detail_df, aggregate_df = self._evaluate_single_config(
+            strategy_name=strategy_name,
+            strategy=strategy,
+            config=normalized_config,
+            tickers=tickers,
+            ticker_frames=ticker_frames,
+            start_date=start_date,
+            end_date=end_date,
+            train_months=train_months,
+            test_months=test_months,
+            ratios=ratios,
+            min_signals=min_signals,
+            cost_r=cost_r,
+            cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
+            min_total_signals=min_total_signals,
+            metrics=metrics,
+        )
+        runtime_seconds = round(perf_counter() - runtime_start, 4)
+        objective, constraints, status = self._summarize_single_config(
+            aggregate_df=aggregate_df,
+            detail_df=detail_df,
+            minimum_signals=min_total_signals or min_signals,
+            cost_r=cost_r,
+        )
+        payload = self._build_evaluation_payload(
+            strategy_name=strategy_name,
+            normalized_config=normalized_config,
+            config_signature=config_signature,
+            request_signature=request_signature,
+            status=status,
+            inactive_parameters=inactive_parameters,
+            slice_payload=slice_payload,
+            objective=objective,
+            constraints=constraints,
+            runtime_seconds=runtime_seconds,
+            errors=[],
+        )
+        self._results_db.store_research_evaluation(payload)
+        return ResearchToolResult(
+            tool_name="evaluate_config",
+            summary=payload,
+            artifacts={"detail": detail_df, "aggregate": aggregate_df, "catalog_entry": entry},
+        )
+
+    def query_incumbent(
+        self,
+        strategy_name: str,
+        *,
+        ticker: str | None = None,
+    ) -> ResearchToolResult:
+        rows = self._memory_rows(strategy_name, ticker=ticker)
+        if not rows:
+            return ResearchToolResult(
+                tool_name="query_incumbent",
+                summary={"strategy": strategy_name, "ticker": ticker, "status": "empty"},
+            )
+        best = self._sort_memory_rows(rows)[0]
+        return ResearchToolResult(
+            tool_name="query_incumbent",
+            summary={
+                "strategy": strategy_name,
+                "ticker": ticker,
+                "status": "ok",
+                "evaluated_configs": len(rows),
+                "incumbent": self._compact_memory_row(best),
+            },
+        )
+
+    def query_pareto_front(
+        self,
+        strategy_name: str,
+        *,
+        ticker: str | None = None,
+        limit: int = 10,
+    ) -> ResearchToolResult:
+        rows = self._sort_memory_rows(self._memory_rows(strategy_name, ticker=ticker))
+        pareto: list[dict[str, Any]] = []
+        for row in rows:
+            if any(self._dominates(existing, row) for existing in pareto):
+                continue
+            pareto = [existing for existing in pareto if not self._dominates(row, existing)]
+            pareto.append(row)
+            if len(pareto) >= limit:
+                break
+        return ResearchToolResult(
+            tool_name="query_pareto_front",
+            summary={
+                "strategy": strategy_name,
+                "ticker": ticker,
+                "status": "ok" if pareto else "empty",
+                "front_size": len(pareto),
+                "pareto_front": [self._compact_memory_row(row) for row in pareto[:limit]],
+            },
+        )
+
+    def query_neighborhood(
+        self,
+        strategy_name: str,
+        config: dict[str, Any],
+        *,
+        radius: int = 1,
+        limit: int = 5,
+    ) -> ResearchToolResult:
+        entry = self.registry.catalog_entry(strategy_name)
+        normalized_config, inactive_parameters, errors = _normalize_strategy_config(entry, config)
+        if errors:
+            return ResearchToolResult(
+                tool_name="query_neighborhood",
+                summary={
+                    "strategy": strategy_name,
+                    "status": "invalid",
+                    "errors": errors,
+                },
+            )
+        rows = self._memory_rows(strategy_name)
+        nearby: list[dict[str, Any]] = []
+        for row in rows:
+            distance = _config_distance(entry.search_spec, normalized_config, row["config"])
+            if distance > radius:
+                continue
+            nearby.append({**row, "distance": distance})
+        def objective_value(row: dict[str, Any]) -> float:
+            value = row.get("objective", {}).get("value")
+            return float(value) if value is not None else float("-inf")
+        nearby.sort(
+            key=lambda row: (
+                row["distance"],
+                -objective_value(row),
+                -(row["constraints"].get("total_signals") or 0),
+            )
+        )
+        return ResearchToolResult(
+            tool_name="query_neighborhood",
+            summary={
+                "strategy": strategy_name,
+                "status": "ok" if nearby else "empty",
+                "center_config": normalized_config,
+                "inactive_parameters": inactive_parameters,
+                "radius": radius,
+                "neighbors": [self._compact_memory_row(row) for row in nearby[:limit]],
+            },
+        )
+
+    def query_dead_zones(
+        self,
+        strategy_name: str,
+        *,
+        ticker: str | None = None,
+    ) -> ResearchToolResult:
+        rows = self._memory_rows(strategy_name, ticker=ticker, include_non_ok=True)
+        entry = self.registry.catalog_entry(strategy_name)
+        dead_zones: list[dict[str, Any]] = []
+        for parameter in (entry.search_spec.parameters if entry.search_spec is not None else []):
+            stats_by_value: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                value = row["config"].get(parameter.name)
+                key = json.dumps(_json_ready(value), sort_keys=True)
+                stats = stats_by_value.setdefault(
+                    key,
+                    {"value": value, "tests": 0, "best_exp_r": None, "invalid_count": 0, "insufficient_count": 0},
+                )
+                stats["tests"] += 1
+                exp_r = row["objective"].get("value")
+                if exp_r is not None and (
+                    stats["best_exp_r"] is None or float(exp_r) > float(stats["best_exp_r"])
+                ):
+                    stats["best_exp_r"] = exp_r
+                if row["status"] == "invalid":
+                    stats["invalid_count"] += 1
+                if row["status"] == "insufficient_signals":
+                    stats["insufficient_count"] += 1
+            for stats in stats_by_value.values():
+                best_exp_r = stats["best_exp_r"]
+                if stats["tests"] < 2:
+                    continue
+                failure_count = stats["invalid_count"] + stats["insufficient_count"]
+                if failure_count < stats["tests"] and best_exp_r is not None and float(best_exp_r) > 0:
+                    continue
+                dead_zones.append(
+                    {
+                        "parameter": parameter.name,
+                        "value": stats["value"],
+                        "tests": stats["tests"],
+                        "best_exp_r": best_exp_r,
+                        "invalid_count": stats["invalid_count"],
+                        "insufficient_count": stats["insufficient_count"],
+                    }
+                )
+        dead_zones.sort(
+            key=lambda item: (
+                -(item["invalid_count"] + item["insufficient_count"]),
+                -(item["tests"]),
+                item["parameter"],
+            )
+        )
+        return ResearchToolResult(
+            tool_name="query_dead_zones",
+            summary={
+                "strategy": strategy_name,
+                "ticker": ticker,
+                "status": "ok" if dead_zones else "empty",
+                "dead_zones": dead_zones[:5],
+            },
+        )
+
     def ablation_check(
         self,
         strategy_name: str,
@@ -334,7 +726,10 @@ class ResearchToolbox:
             for alt_value in alt_values[:1]:
                 ablated = dict(base_config)
                 ablated[param_name] = alt_value
-                variants.append(ablated)
+                normalized_variant, _, errors = _normalize_strategy_config(entry, ablated)
+                if errors:
+                    continue
+                variants.append(normalized_variant)
                 if len(variants) >= max_variants:
                     break
             if len(variants) >= max_variants:
@@ -629,6 +1024,229 @@ class ResearchToolbox:
             artifacts={"detail": detail_df, "ranked": ranked_df},
         )
 
+    def _evaluate_single_config(
+        self,
+        *,
+        strategy_name: str,
+        strategy: BaseStrategy,
+        config: dict[str, Any],
+        tickers: list[str] | None,
+        ticker_frames: dict[str, pl.DataFrame] | None,
+        start_date: date,
+        end_date: date,
+        train_months: int,
+        test_months: int,
+        ratios: list[float],
+        min_signals: int,
+        cost_r: float | None,
+        cost_bps: float | None,
+        evaluation_window: int | None,
+        min_total_signals: int | None,
+        metrics: MetricsCalculator,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        windows = build_windows(start_date, end_date, train_months, test_months)
+        if not windows:
+            return pl.DataFrame(), pl.DataFrame()
+        enriched_frames = self._load_enriched_frames(
+            strategies=[strategy],
+            tickers=tickers or sorted(ticker_frames or {}),
+            start_date=start_date,
+            end_date=end_date,
+            ticker_frames=ticker_frames,
+        )
+        detail_df = self._run_strategy_sweep(
+            strategy_name=strategy_name,
+            strategies=[strategy],
+            configs=[config],
+            ticker_frames=enriched_frames,
+            windows=windows,
+            ratios=ratios,
+            metrics=metrics,
+            min_signals=min_signals,
+            cost_r=cost_r,
+            cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
+        )
+        aggregate_df = self._aggregate_sweep(
+            detail_df,
+            [config],
+            min_total_signals=min_total_signals,
+        )
+        return detail_df, aggregate_df
+
+    @staticmethod
+    def _weighted_metric(frame: pl.DataFrame, value_col: str, weight_col: str) -> float | None:
+        if frame.is_empty() or value_col not in frame.columns:
+            return None
+        rows = frame.select([value_col, weight_col]).to_dicts()
+        weighted_sum = 0.0
+        total_weight = 0.0
+        for row in rows:
+            value = row.get(value_col)
+            weight = row.get(weight_col)
+            if value is None or weight is None:
+                continue
+            value_f = float(value)
+            weight_f = float(weight)
+            if not isfinite(value_f) or not isfinite(weight_f) or weight_f <= 0:
+                continue
+            weighted_sum += value_f * weight_f
+            total_weight += weight_f
+        if total_weight <= 0:
+            return None
+        return round(weighted_sum / total_weight, 4)
+
+    def _summarize_single_config(
+        self,
+        *,
+        aggregate_df: pl.DataFrame,
+        detail_df: pl.DataFrame,
+        minimum_signals: int,
+        cost_r: float | None,
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        combined_df = (
+            aggregate_df.filter(pl.col("direction") == "combined")
+            if not aggregate_df.is_empty() and "direction" in aggregate_df.columns
+            else aggregate_df
+        )
+        if combined_df.is_empty():
+            return (
+                {
+                    "primary_metric": "avg_test_exp_r",
+                    "value": None,
+                    "confidence": None,
+                    "avg_mfe_mae_ratio": None,
+                },
+                {
+                    "total_signals": 0,
+                    "minimum_signals": minimum_signals,
+                    "passes_signal_floor": False,
+                    "insufficiency_flags": ["no_valid_walk_forward_rows"],
+                    "effective_cost_r": cost_r,
+                },
+                "insufficient_signals",
+            )
+
+        total_signals = int(combined_df["total_oos_signals"].sum()) if "total_oos_signals" in combined_df.columns else 0
+        avg_exp_r = self._weighted_metric(combined_df, "avg_test_exp_r", "total_oos_signals")
+        avg_confidence = self._weighted_metric(combined_df, "avg_test_confidence", "total_oos_signals")
+        avg_mfe_mae_ratio = self._weighted_metric(combined_df, "avg_test_mfe_mae_ratio", "total_oos_signals")
+        effective_cost_r = self._weighted_metric(combined_df, "avg_effective_cost_r", "total_oos_signals")
+        insufficiency_flags: list[str] = []
+        passes_signal_floor = total_signals >= minimum_signals
+        if not passes_signal_floor:
+            insufficiency_flags.append("below_signal_floor")
+        status = "ok" if passes_signal_floor else "insufficient_signals"
+        return (
+            {
+                "primary_metric": "avg_test_exp_r",
+                "value": avg_exp_r,
+                "confidence": avg_confidence,
+                "avg_mfe_mae_ratio": avg_mfe_mae_ratio,
+            },
+            {
+                "total_signals": total_signals,
+                "minimum_signals": minimum_signals,
+                "passes_signal_floor": passes_signal_floor,
+                "insufficiency_flags": insufficiency_flags,
+                "effective_cost_r": effective_cost_r,
+                "detail_rows": detail_df.height,
+            },
+            status,
+        )
+
+    @staticmethod
+    def _build_evaluation_payload(
+        *,
+        strategy_name: str,
+        normalized_config: dict[str, Any],
+        config_signature: str,
+        request_signature: str,
+        status: str,
+        inactive_parameters: list[str],
+        slice_payload: dict[str, Any],
+        objective: dict[str, Any],
+        constraints: dict[str, Any],
+        runtime_seconds: float,
+        errors: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "strategy": strategy_name,
+            "config": _json_ready(normalized_config),
+            "config_signature": config_signature,
+            "request_signature": request_signature,
+            "status": status,
+            "already_evaluated": False,
+            "inactive_parameters": inactive_parameters,
+            "objective": objective,
+            "constraints": constraints,
+            "runtime_seconds": runtime_seconds,
+            "slice": slice_payload,
+            "errors": errors,
+        }
+
+    def _memory_rows(
+        self,
+        strategy_name: str,
+        *,
+        ticker: str | None = None,
+        include_non_ok: bool = False,
+    ) -> list[dict[str, Any]]:
+        rows = self._results_db.list_research_evaluations(strategy=strategy_name, ticker=ticker)
+        if include_non_ok:
+            return rows
+        return [row for row in rows if row.get("status") != "invalid"]
+
+    @staticmethod
+    def _sort_memory_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        def rank_value(value: Any) -> float:
+            if value is None:
+                return float("-inf")
+            return float(value)
+
+        return sorted(
+            rows,
+            key=lambda row: (
+                rank_value(row.get("objective", {}).get("value")),
+                rank_value(row.get("objective", {}).get("confidence")),
+                float(row.get("constraints", {}).get("total_signals") or 0),
+                row.get("config_signature", ""),
+            ),
+            reverse=True,
+        )
+
+    @staticmethod
+    def _compact_memory_row(row: dict[str, Any]) -> dict[str, Any]:
+        compact = {
+            "config_signature": row.get("config_signature"),
+            "status": row.get("status"),
+            "config": row.get("config"),
+            "objective": row.get("objective"),
+            "constraints": row.get("constraints"),
+            "inactive_parameters": row.get("inactive_parameters", []),
+            "tickers": row.get("slice", {}).get("tickers", []),
+        }
+        if "distance" in row:
+            compact["distance"] = row["distance"]
+        return compact
+
+    @staticmethod
+    def _dominates(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        left_obj = left.get("objective", {})
+        right_obj = right.get("objective", {})
+        left_constraints = left.get("constraints", {})
+        right_constraints = right.get("constraints", {})
+        def score(value: Any) -> float:
+            return float(value) if value is not None else float("-inf")
+        comparisons = [
+            (score(left_obj.get("value")), score(right_obj.get("value"))),
+            (score(left_obj.get("confidence")), score(right_obj.get("confidence"))),
+            (left_constraints.get("total_signals") or 0, right_constraints.get("total_signals") or 0),
+        ]
+        return all(left_value >= right_value for left_value, right_value in comparisons) and any(
+            left_value > right_value for left_value, right_value in comparisons
+        )
+
     def _strategy_sweep_result(
         self,
         *,
@@ -838,18 +1456,23 @@ class ResearchToolbox:
             column for column in ("catalog_strategy", "base_strategy") if column in detail_df.columns
         ]
         group_cols = ["ticker", "strategy", "direction", *context_cols, *config_cols]
+        agg_exprs = [
+            pl.len().alias("oos_windows"),
+            pl.col("test_signals").sum().alias("total_oos_signals"),
+            pl.col("test_exp_r").mean().alias("avg_oos_exp_r"),
+            pl.col("test_exp_r").median().alias("med_oos_exp_r"),
+            (pl.col("test_exp_r") > 0).mean().alias("pct_positive_windows"),
+            pl.col("test_confidence").mean().alias("avg_confidence"),
+            pl.col("effective_cost_r").mean().alias("avg_effective_cost_r"),
+            pl.col("selected_ratio").median().alias("median_selected_ratio"),
+        ]
+        if "test_avg_mfe_mae_ratio" in detail_df.columns:
+            agg_exprs.append(
+                pl.col("test_avg_mfe_mae_ratio").mean().alias("avg_mfe_mae_ratio")
+            )
         aggregate_df = (
             detail_df.group_by(group_cols)
-            .agg([
-                pl.len().alias("oos_windows"),
-                pl.col("test_signals").sum().alias("total_oos_signals"),
-                pl.col("test_exp_r").mean().alias("avg_oos_exp_r"),
-                pl.col("test_exp_r").median().alias("med_oos_exp_r"),
-                (pl.col("test_exp_r") > 0).mean().alias("pct_positive_windows"),
-                pl.col("test_confidence").mean().alias("avg_confidence"),
-                pl.col("effective_cost_r").mean().alias("avg_effective_cost_r"),
-                pl.col("selected_ratio").median().alias("median_selected_ratio"),
-            ])
+            .agg(agg_exprs)
         )
         if min_total_signals is not None:
             aggregate_df = aggregate_df.with_columns(
@@ -863,6 +1486,9 @@ class ResearchToolbox:
             pl.col("avg_oos_exp_r").alias("avg_test_exp_r"),
             pl.col("pct_positive_windows").alias("pct_positive_oos_windows"),
             pl.col("avg_confidence").alias("avg_test_confidence"),
+            pl.col("avg_mfe_mae_ratio").alias("avg_test_mfe_mae_ratio")
+            if "avg_mfe_mae_ratio" in aggregate_df.columns
+            else pl.lit(None).alias("avg_test_mfe_mae_ratio"),
             (
                 pl.col("avg_oos_exp_r") * 1000
                 + pl.col("pct_positive_windows") * 100

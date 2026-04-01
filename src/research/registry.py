@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.research.models import StrategyCatalogEntry, StrategyStatus, ValidationStrategy
+from src.research.models import (
+    ObjectiveSpec,
+    StrategyCatalogEntry,
+    StrategySearchSpec,
+    StrategyStatus,
+    ValidationStrategy,
+)
 from src.research.state import load_research_state
 from src.strategy.base import BaseStrategy, required_feature_union
 from src.strategy.factory import build_strategy
@@ -49,19 +55,30 @@ class ResearchRegistry:
         return [self.build(item.strategy) for item in self.validation_set()]
 
     def catalog_entry(self, strategy_name: str, params: dict | None = None) -> StrategyCatalogEntry:
-        tracked = self.state.strategies[strategy_name]
+        tracked = self.state.strategies.get(strategy_name)
         strategy = self.build(strategy_name, params)
+        strategy_config = strategy.strategy_config()
+        search_spec = strategy.search_spec or StrategySearchSpec.from_parameter_space(
+            strategy.parameter_space,
+            strategy_config=strategy_config,
+            objective=ObjectiveSpec(
+                primary_metric="avg_test_exp_r",
+                minimum_signals=20,
+                tie_breakers=["pct_positive_oos_windows", "oos_signals"],
+            ),
+        )
         return StrategyCatalogEntry(
             name=strategy.name,
-            status=tracked.status,
-            tickers=list(tracked.tickers),
-            directions=list(tracked.directions),
+            status=tracked.status if tracked is not None else StrategyStatus.CANDIDATE,
+            tickers=list(tracked.tickers) if tracked is not None else [],
+            directions=list(tracked.directions) if tracked is not None else [],
             evaluation_mode=strategy.evaluation_mode,
             required_features=sorted(required_feature_union([strategy])),
             parameter_space={key: list(values) for key, values in strategy.parameter_space.items()},
-            strategy_config=strategy.strategy_config(),
-            notes=tracked.notes,
-            evidence=tracked.evidence,
+            search_spec=search_spec,
+            strategy_config=strategy_config,
+            notes=tracked.notes if tracked is not None else "",
+            evidence=tracked.evidence if tracked is not None else "",
         )
 
     def validation_entries(self) -> list[StrategyCatalogEntry]:

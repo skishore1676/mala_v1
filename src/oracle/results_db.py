@@ -103,6 +103,30 @@ class ResultsDB:
                     ON artifact_rows(ticker, strategy, direction);
                 CREATE INDEX IF NOT EXISTS idx_artifact_rows_decision
                     ON artifact_rows(decision);
+
+                CREATE TABLE IF NOT EXISTS research_evaluations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    ticker TEXT,
+                    config_signature TEXT NOT NULL,
+                    request_signature TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    total_signals INTEGER,
+                    exp_r REAL,
+                    confidence REAL,
+                    avg_mfe_mae_ratio REAL,
+                    effective_cost_r REAL,
+                    runtime_seconds REAL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_research_evaluations_strategy
+                    ON research_evaluations(strategy);
+                CREATE INDEX IF NOT EXISTS idx_research_evaluations_signature
+                    ON research_evaluations(config_signature);
+                CREATE INDEX IF NOT EXISTS idx_research_evaluations_ticker
+                    ON research_evaluations(ticker);
                 """
             )
 
@@ -208,3 +232,83 @@ class ResultsDB:
                 """,
                 rows_to_insert,
             )
+
+    def fetch_research_evaluation(self, request_signature: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload_json
+                FROM research_evaluations
+                WHERE request_signature = ?
+                """,
+                (request_signature,),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def store_research_evaluation(self, payload: dict[str, Any]) -> None:
+        constraints = payload.get("constraints", {})
+        objective = payload.get("objective", {})
+        tickers = payload.get("slice", {}).get("tickers") or []
+        ticker = tickers[0] if len(tickers) == 1 else None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO research_evaluations(
+                    created_at,
+                    strategy,
+                    ticker,
+                    config_signature,
+                    request_signature,
+                    status,
+                    total_signals,
+                    exp_r,
+                    confidence,
+                    avg_mfe_mae_ratio,
+                    effective_cost_r,
+                    runtime_seconds,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _utc_now(),
+                    payload.get("strategy"),
+                    ticker,
+                    payload.get("config_signature"),
+                    payload.get("request_signature"),
+                    payload.get("status"),
+                    _to_int(constraints.get("total_signals")),
+                    _to_float(objective.get("value")),
+                    _to_float(objective.get("confidence")),
+                    _to_float(objective.get("avg_mfe_mae_ratio")),
+                    _to_float(constraints.get("effective_cost_r")),
+                    _to_float(payload.get("runtime_seconds")),
+                    json.dumps(payload, default=str),
+                ),
+            )
+
+    def list_research_evaluations(
+        self,
+        *,
+        strategy: str,
+        ticker: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT payload_json
+            FROM research_evaluations
+            WHERE strategy = ?
+            ORDER BY created_at DESC, id DESC
+        """
+        params: tuple[Any, ...] = (strategy,)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        payloads = [json.loads(row[0]) for row in rows]
+        if ticker is None:
+            return payloads
+        filtered: list[dict[str, Any]] = []
+        for payload in payloads:
+            payload_tickers = payload.get("slice", {}).get("tickers") or []
+            if ticker in payload_tickers:
+                filtered.append(payload)
+        return filtered

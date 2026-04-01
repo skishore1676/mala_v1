@@ -14,10 +14,12 @@ _STAGE_ACTIONS: dict[ResearchStage, list[tuple[str, str, str]]] = {
     ResearchStage.M1_DISCOVERY: [
         ("parameter_sweep", "parameter_sweep", "Search for any edge in the declared parameter space."),
         ("baseline_comparison", "baseline_comparison", "Compare the candidate against the refactor validation baselines."),
+        ("evaluate_config", "evaluate_config", "Evaluate one exact config and record compact optimizer memory."),
     ],
     ResearchStage.M2_CONVERGENCE: [
         ("convergence_grid", "convergence_grid", "Stress the candidate across friction and stability assumptions."),
         ("ablation_check", "ablation_check", "Test whether the proposed edge survives key feature removal."),
+        ("evaluate_config", "evaluate_config", "Probe one exact config while preserving compact search memory."),
     ],
     ResearchStage.M3_WALK_FORWARD: [
         ("walk_forward", "walk_forward", "Select parameters on train windows and verify OOS adaptation."),

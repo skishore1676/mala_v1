@@ -31,6 +31,14 @@ from src.newton.market_impulse import (
     market_impulse_vwma_feature_spec,
     validate_vwma_periods,
 )
+from src.research.models import (
+    ConstraintSpec,
+    DomainSpec,
+    MonotonicOrdering,
+    ObjectiveSpec,
+    ParameterSpec,
+    StrategySearchSpec,
+)
 from src.strategy.base import BaseStrategy
 from src.time_utils import et_time_expr
 
@@ -98,6 +106,54 @@ class MarketImpulseStrategy(BaseStrategy):
     @property
     def evaluation_mode(self) -> str:
         return "directional"
+
+    @property
+    def search_spec(self) -> StrategySearchSpec:
+        return StrategySearchSpec(
+            parameters=[
+                ParameterSpec(
+                    name="entry_buffer_minutes",
+                    type="discrete",
+                    domain=DomainSpec(values=[3, 5]),
+                    default=self.entry_buffer_minutes,
+                    prior_center=3,
+                ),
+                ParameterSpec(
+                    name="entry_window_minutes",
+                    type="discrete",
+                    domain=DomainSpec(values=[45, 60, 90]),
+                    default=self.entry_window_minutes,
+                    prior_center=60,
+                ),
+                ParameterSpec(
+                    name="regime_timeframe",
+                    type="categorical",
+                    domain=DomainSpec(values=["5m", "15m", "30m", "1h"]),
+                    default=self.regime_timeframe,
+                    prior_center="5m",
+                ),
+                ParameterSpec(
+                    name="vwma_periods",
+                    type="categorical",
+                    domain=DomainSpec(values=[(5, 13, 21), (8, 21, 34), (10, 20, 40)]),
+                    default=tuple(self.vwma_periods),
+                    prior_center=(8, 21, 34),
+                ),
+            ],
+            constraints=ConstraintSpec(
+                monotonic_ordering=[
+                    MonotonicOrdering(
+                        parameters=["entry_buffer_minutes", "entry_window_minutes"],
+                        direction="strictly_ascending",
+                    )
+                ]
+            ),
+            objective=ObjectiveSpec(
+                primary_metric="avg_test_exp_r",
+                minimum_signals=20,
+                tie_breakers=["pct_positive_oos_windows", "oos_signals"],
+            ),
+        )
 
     def strategy_config(self) -> dict[str, Any]:
         return {

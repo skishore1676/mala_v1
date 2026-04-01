@@ -39,6 +39,14 @@ from src.newton.transforms import (
     validate_periods_back,
     velocity_column_name,
 )
+from src.research.models import (
+    ConstraintSpec,
+    DomainSpec,
+    GatingCondition,
+    ObjectiveSpec,
+    ParameterSpec,
+    StrategySearchSpec,
+)
 from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_time_expr
 
@@ -109,6 +117,61 @@ class JerkPivotMomentumStrategy(BaseStrategy):
     @property
     def evaluation_mode(self) -> str:
         return "directional"
+
+    @property
+    def search_spec(self) -> StrategySearchSpec:
+        return StrategySearchSpec(
+            parameters=[
+                ParameterSpec(
+                    name="vpoc_proximity_pct",
+                    type="discrete",
+                    domain=DomainSpec(values=[0.0015, 0.002, 0.003]),
+                    default=self.vpoc_proximity_pct,
+                    prior_center=0.002,
+                ),
+                ParameterSpec(
+                    name="jerk_lookback",
+                    type="discrete",
+                    domain=DomainSpec(values=[8, 10, 12]),
+                    default=self.jerk_lookback,
+                    prior_center=10,
+                ),
+                ParameterSpec(
+                    name="kinematic_periods_back",
+                    type="discrete",
+                    domain=DomainSpec(values=[1, 3, 5]),
+                    default=self.kinematic_periods_back,
+                    prior_center=1,
+                ),
+                ParameterSpec(
+                    name="use_volume_filter",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=self.use_volume_filter,
+                    prior_center=True,
+                ),
+                ParameterSpec(
+                    name="volume_multiplier",
+                    type="discrete",
+                    domain=DomainSpec(values=[1.0, 1.1, 1.2, 1.3]),
+                    default=self.volume_multiplier,
+                    prior_center=1.3,
+                ),
+            ],
+            constraints=ConstraintSpec(
+                gating_conditions=[
+                    GatingCondition(
+                        parameter="volume_multiplier",
+                        requires={"use_volume_filter": True},
+                    )
+                ]
+            ),
+            objective=ObjectiveSpec(
+                primary_metric="avg_test_exp_r",
+                minimum_signals=20,
+                tie_breakers=["pct_positive_oos_windows", "oos_signals"],
+            ),
+        )
 
     def strategy_config(self) -> dict[str, Any]:
         return {

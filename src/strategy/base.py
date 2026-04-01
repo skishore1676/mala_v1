@@ -10,9 +10,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from datetime import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from src.research.models import StrategySearchSpec
 
 
 class BaseStrategy(ABC):
@@ -51,6 +54,11 @@ class BaseStrategy(ABC):
     def evaluation_mode(self) -> str:
         """Evaluation family used by research orchestration."""
         return "binary"
+
+    @property
+    def search_spec(self) -> StrategySearchSpec | None:
+        """Optional compact search metadata for agent-native research loops."""
+        return None
 
     def strategy_config(self) -> dict[str, Any]:
         """Serializable runtime configuration for registry and orchestration use."""
