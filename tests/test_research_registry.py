@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import subprocess
+import sys
+from typing import Any
 
 import polars as pl
 
@@ -14,7 +17,44 @@ from src.research import (
     ResearchToolbox,
     load_research_state,
 )
-from src.research.tools import _annotate_plateau_metrics, _bounded_param_grid
+from src.research.models import (
+    ConstraintSpec,
+    DomainSpec,
+    GatingCondition,
+    ObjectiveSpec,
+    ParameterSpec,
+    StrategyCatalogEntry,
+    StrategySearchSpec,
+    StrategyStatus,
+)
+from src.research.tools import ResearchToolResult, _annotate_plateau_metrics, _bounded_param_grid
+from src.strategy.base import BaseStrategy
+
+
+class _StubStrategy(BaseStrategy):
+    def __init__(self, params: dict[str, Any] | None = None) -> None:
+        self._params = dict(params or {})
+
+    @property
+    def name(self) -> str:
+        return "Stub Strategy"
+
+    def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        return df
+
+    def strategy_config(self) -> dict[str, Any]:
+        return dict(self._params)
+
+
+class _StubRegistry:
+    def __init__(self, entry: StrategyCatalogEntry) -> None:
+        self._entry = entry
+
+    def catalog_entry(self, strategy_name: str, params: dict | None = None) -> StrategyCatalogEntry:
+        return self._entry
+
+    def build(self, strategy_name: str, params: dict | None = None) -> BaseStrategy:
+        return _StubStrategy(params)
 
 
 def _write_state_file(path: Path) -> None:
@@ -177,6 +217,32 @@ def test_toolbox_parameter_sweep_and_baselines(tmp_path: Path) -> None:
     assert comparison.artifacts["comparisons"][0]["baseline"] == "Elastic Band z=1.25/w=360+dm"
 
 
+def test_research_package_lazy_imports_avoid_strategy_circular_import_regression() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from src.strategy.kinematic_ladder import KinematicLadderStrategy; "
+            "from src.strategy.factory import build_strategy; "
+            "from src.research import ResearchToolbox; "
+            "print(KinematicLadderStrategy.__name__, build_strategy('Kinematic Ladder').name, ResearchToolbox.__name__)"
+        ),
+    ]
+
+    completed = subprocess.run(
+        command,
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "KinematicLadderStrategy" in completed.stdout
+    assert "ResearchToolbox" in completed.stdout
+
+
 def test_bounded_param_grid_samples_across_full_space() -> None:
     configs = _bounded_param_grid(
         {
@@ -190,6 +256,133 @@ def test_bounded_param_grid_samples_across_full_space() -> None:
     assert len(configs) == 4
     assert {config["a"] for config in configs} == {1, 2}
     assert {config["b"] for config in configs} == {10, 20}
+
+
+def test_parameter_sweep_prefers_search_spec_over_legacy_parameter_space(monkeypatch) -> None:
+    toolbox = ResearchToolbox()
+    entry = StrategyCatalogEntry(
+        name="Stub Strategy",
+        status=StrategyStatus.CANDIDATE,
+        tickers=[],
+        directions=[],
+        evaluation_mode="directional",
+        required_features=[],
+        parameter_space={"fast_window": [5]},
+        search_spec=StrategySearchSpec(
+            parameters=[
+                ParameterSpec(
+                    name="fast_window",
+                    type="discrete",
+                    domain=DomainSpec(values=[8, 13]),
+                    default=8,
+                    prior_center=13,
+                )
+            ],
+            objective=ObjectiveSpec(
+                primary_metric="avg_test_exp_r",
+                minimum_signals=20,
+            ),
+        ),
+        strategy_config={"fast_window": 8},
+    )
+    toolbox.registry = _StubRegistry(entry)
+
+    monkeypatch.setattr(
+        toolbox,
+        "_strategy_sweep_result",
+        lambda **kwargs: ResearchToolResult(
+            tool_name=kwargs["tool_name"],
+            summary={"config_count": len(kwargs["configs"])},
+            artifacts={"configs": kwargs["configs"]},
+        ),
+    )
+
+    result = toolbox.parameter_sweep("Stub Strategy", max_configs=1)
+
+    assert result.artifacts["configs"] == [{"fast_window": 13}]
+
+
+def test_parameter_sweep_prunes_inactive_parameters_before_budget_is_spent(monkeypatch) -> None:
+    toolbox = ResearchToolbox()
+    entry = StrategyCatalogEntry(
+        name="Stub Strategy",
+        status=StrategyStatus.CANDIDATE,
+        tickers=[],
+        directions=[],
+        evaluation_mode="directional",
+        required_features=[],
+        parameter_space={"use_filter": [True, False], "threshold": [1, 2]},
+        search_spec=StrategySearchSpec(
+            parameters=[
+                ParameterSpec(
+                    name="use_filter",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=True,
+                    prior_center=True,
+                ),
+                ParameterSpec(
+                    name="threshold",
+                    type="discrete",
+                    domain=DomainSpec(values=[1, 2]),
+                    default=1,
+                    prior_center=1,
+                ),
+            ],
+            constraints=ConstraintSpec(
+                gating_conditions=[
+                    GatingCondition(parameter="threshold", requires={"use_filter": True})
+                ]
+            ),
+        ),
+        strategy_config={"use_filter": True, "threshold": 1},
+    )
+    toolbox.registry = _StubRegistry(entry)
+    monkeypatch.setattr(
+        toolbox,
+        "_strategy_sweep_result",
+        lambda **kwargs: ResearchToolResult(
+            tool_name=kwargs["tool_name"],
+            summary={"config_count": len(kwargs["configs"])},
+            artifacts={"configs": kwargs["configs"]},
+        ),
+    )
+
+    result = toolbox.parameter_sweep("Stub Strategy", max_configs=10)
+
+    assert result.summary["requested_config_count"] == 4
+    assert result.summary["config_count"] == 3
+    assert {"use_filter": False} in result.artifacts["configs"]
+    assert sum(1 for config in result.artifacts["configs"] if config == {"use_filter": False}) == 1
+
+
+def test_parameter_sweep_falls_back_to_parameter_space_when_search_spec_missing(monkeypatch) -> None:
+    toolbox = ResearchToolbox()
+    entry = StrategyCatalogEntry(
+        name="Stub Strategy",
+        status=StrategyStatus.CANDIDATE,
+        tickers=[],
+        directions=[],
+        evaluation_mode="directional",
+        required_features=[],
+        parameter_space={"fast_window": [5, 9]},
+        search_spec=None,
+        strategy_config={"fast_window": 5},
+    )
+    toolbox.registry = _StubRegistry(entry)
+    monkeypatch.setattr(
+        toolbox,
+        "_strategy_sweep_result",
+        lambda **kwargs: ResearchToolResult(
+            tool_name=kwargs["tool_name"],
+            summary={"config_count": len(kwargs["configs"])},
+            artifacts={"configs": kwargs["configs"]},
+        ),
+    )
+
+    result = toolbox.parameter_sweep("Stub Strategy", max_configs=2)
+
+    assert result.artifacts["configs"] == [{"fast_window": 5}, {"fast_window": 9}]
 
 
 def test_toolbox_parameter_sweep_executes_walk_forward(tmp_path: Path) -> None:
@@ -548,6 +741,22 @@ def test_toolbox_compact_memory_queries_summarize_without_dumping_history(tmp_pa
     ]
     for config in configs:
         toolbox.evaluate_config(config=config, **shared_kwargs)
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "config": {"z_score_threshold": 1.25, "z_score_window": 120},
+            "config_signature": "manual-competitive",
+            "request_signature": "manual-competitive:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.11, "confidence": 0.58},
+            "constraints": {"total_signals": 140, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": {"tickers": ["META"]},
+            "errors": [],
+        }
+    )
 
     incumbent = toolbox.query_incumbent("Elastic Band Reversion", ticker="META")
     neighborhood = toolbox.query_neighborhood(
@@ -565,6 +774,54 @@ def test_toolbox_compact_memory_queries_summarize_without_dumping_history(tmp_pa
     assert len(neighborhood.summary["neighbors"]) >= 1
     assert pareto.summary["status"] == "ok"
     assert pareto.summary["front_size"] >= 1
+
+
+def test_incumbent_and_pareto_exclude_insufficient_configs_by_default(tmp_path: Path) -> None:
+    toolbox = ResearchToolbox(results_db_path=tmp_path / "research_results.db")
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "config": {"z_score_threshold": 1.0},
+            "config_signature": "competitive",
+            "request_signature": "competitive:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.08, "confidence": 0.55},
+            "constraints": {"total_signals": 120, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": {"tickers": ["META"]},
+            "errors": [],
+        }
+    )
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "config": {"z_score_threshold": 3.0},
+            "config_signature": "insufficient",
+            "request_signature": "insufficient:req",
+            "status": "insufficient_signals",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.5, "confidence": 0.9},
+            "constraints": {"total_signals": 3, "passes_signal_floor": False},
+            "runtime_seconds": 0.1,
+            "slice": {"tickers": ["META"]},
+            "errors": [],
+        }
+    )
+
+    incumbent = toolbox.query_incumbent("Elastic Band Reversion", ticker="META")
+    incumbent_all = toolbox.query_incumbent(
+        "Elastic Band Reversion",
+        ticker="META",
+        include_non_competitive=True,
+    )
+    pareto = toolbox.query_pareto_front("Elastic Band Reversion", ticker="META")
+
+    assert incumbent.summary["incumbent"]["config_signature"] == "competitive"
+    assert incumbent_all.summary["incumbent"]["config_signature"] == "insufficient"
+    assert [row["config_signature"] for row in pareto.summary["pareto_front"]] == ["competitive"]
 
 
 def test_query_dead_zones_returns_compact_failure_summary(tmp_path: Path) -> None:

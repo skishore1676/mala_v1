@@ -70,6 +70,24 @@ def _bounded_param_grid(
     return [all_configs[index] for index in indices]
 
 
+def _sample_configs(
+    configs: list[dict[str, Any]],
+    *,
+    max_configs: int,
+) -> list[dict[str, Any]]:
+    if len(configs) <= max_configs:
+        return list(configs)
+    if max_configs <= 1:
+        return [configs[0]]
+    indices = sorted(
+        {
+            round(i * (len(configs) - 1) / (max_configs - 1))
+            for i in range(max_configs)
+        }
+    )
+    return [configs[index] for index in indices]
+
+
 def _config_columns(configs: list[dict[str, Any]]) -> list[str]:
     keys: set[str] = set()
     for config in configs:
@@ -163,6 +181,64 @@ def _config_distance(
             continue
         distance += abs(left_index - right_index)
     return distance
+
+
+def _config_identity(config: dict[str, Any]) -> str:
+    return json.dumps(_json_ready(config), sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_sweep_configs(
+    entry: StrategyCatalogEntry,
+    *,
+    parameter_space_override: dict[str, list[Any]] | None,
+    max_configs: int,
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    validate_values = parameter_space_override is None
+    if entry.search_spec is not None and parameter_space_override is None:
+        raw_configs = _bounded_param_grid(entry.search_spec.search_space(), max_configs=10**9)
+    else:
+        raw_configs = _bounded_param_grid(
+            parameter_space_override or entry.parameter_space,
+            max_configs=10**9,
+        )
+
+    normalized_configs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    invalid_config_count = 0
+    for raw_config in raw_configs:
+        normalized_config, _, errors = _normalize_strategy_config(
+            entry,
+            raw_config,
+            validate_values=validate_values,
+        )
+        if errors:
+            invalid_config_count += 1
+            continue
+        identity = _config_identity(normalized_config)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized_configs.append(normalized_config)
+
+    normalized_duplicate_count = len(raw_configs) - invalid_config_count - len(normalized_configs)
+    return (
+        _sample_configs(normalized_configs, max_configs=max_configs),
+        len(raw_configs),
+        invalid_config_count,
+        normalized_duplicate_count,
+    )
+
+
+def _entry_search_space(
+    entry: StrategyCatalogEntry,
+    *,
+    parameter_space_override: dict[str, list[Any]] | None = None,
+) -> dict[str, list[Any]]:
+    if parameter_space_override is not None:
+        return {key: list(values) for key, values in parameter_space_override.items()}
+    if entry.search_spec is not None:
+        return entry.search_spec.search_space()
+    return {key: list(values) for key, values in entry.parameter_space.items()}
 
 
 def _dedupe_strategy_variants(
@@ -331,23 +407,14 @@ class ResearchToolbox:
         metrics: MetricsCalculator | None = None,
     ) -> ResearchToolResult:
         entry = self.registry.catalog_entry(strategy_name)
-        sweep_space = parameter_space or entry.parameter_space
-        raw_configs = _bounded_param_grid(sweep_space, max_configs=max_configs)
-        requested_config_count = len(raw_configs)
-        configs: list[dict[str, Any]] = []
-        invalid_config_count = 0
-        for raw_config in raw_configs:
-            normalized_config, _, errors = _normalize_strategy_config(
-                entry,
-                raw_config,
-                validate_values=False,
-            )
-            if errors:
-                invalid_config_count += 1
-                continue
-            configs.append(normalized_config)
+        sweep_space = _entry_search_space(entry, parameter_space_override=parameter_space)
+        configs, requested_config_count, invalid_config_count, normalized_duplicate_count = _canonical_sweep_configs(
+            entry,
+            parameter_space_override=parameter_space,
+            max_configs=max_configs,
+        )
         strategies = [self.registry.build(strategy_name, params) for params in configs]
-        configs, strategies, duplicate_config_count = _dedupe_strategy_variants(configs, strategies)
+        configs, strategies, strategy_duplicate_count = _dedupe_strategy_variants(configs, strategies)
 
         result = self._strategy_sweep_result(
             tool_name="parameter_sweep",
@@ -371,7 +438,7 @@ class ResearchToolbox:
         )
         result.summary["parameter_count"] = len(sweep_space)
         result.summary["requested_config_count"] = requested_config_count
-        result.summary["duplicate_config_count"] = duplicate_config_count
+        result.summary["duplicate_config_count"] = normalized_duplicate_count + strategy_duplicate_count
         result.summary["invalid_config_count"] = invalid_config_count
         result.summary["stage_objective"] = "find_edge_anywhere"
         return result
@@ -541,12 +608,22 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        include_non_competitive: bool = False,
     ) -> ResearchToolResult:
-        rows = self._memory_rows(strategy_name, ticker=ticker)
+        rows = self._memory_rows(
+            strategy_name,
+            ticker=ticker,
+            include_non_competitive=include_non_competitive,
+        )
         if not rows:
             return ResearchToolResult(
                 tool_name="query_incumbent",
-                summary={"strategy": strategy_name, "ticker": ticker, "status": "empty"},
+                summary={
+                    "strategy": strategy_name,
+                    "ticker": ticker,
+                    "status": "empty",
+                    "include_non_competitive": include_non_competitive,
+                },
             )
         best = self._sort_memory_rows(rows)[0]
         return ResearchToolResult(
@@ -556,6 +633,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok",
                 "evaluated_configs": len(rows),
+                "include_non_competitive": include_non_competitive,
                 "incumbent": self._compact_memory_row(best),
             },
         )
@@ -566,8 +644,15 @@ class ResearchToolbox:
         *,
         ticker: str | None = None,
         limit: int = 10,
+        include_non_competitive: bool = False,
     ) -> ResearchToolResult:
-        rows = self._sort_memory_rows(self._memory_rows(strategy_name, ticker=ticker))
+        rows = self._sort_memory_rows(
+            self._memory_rows(
+                strategy_name,
+                ticker=ticker,
+                include_non_competitive=include_non_competitive,
+            )
+        )
         pareto: list[dict[str, Any]] = []
         for row in rows:
             if any(self._dominates(existing, row) for existing in pareto):
@@ -583,6 +668,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok" if pareto else "empty",
                 "front_size": len(pareto),
+                "include_non_competitive": include_non_competitive,
                 "pareto_front": [self._compact_memory_row(row) for row in pareto[:limit]],
             },
         )
@@ -720,7 +806,7 @@ class ResearchToolbox:
         base_config = entry.strategy_config
         variants: list[dict[str, Any]] = []
 
-        for param_name, candidates in entry.parameter_space.items():
+        for param_name, candidates in _entry_search_space(entry).items():
             current_value = base_config.get(param_name)
             alt_values = [value for value in candidates if value != current_value]
             for alt_value in alt_values[:1]:
@@ -756,7 +842,7 @@ class ResearchToolbox:
             ticker_frames=ticker_frames,
             metrics=metrics,
         )
-        result.summary["supports_parameter_ablation"] = bool(entry.parameter_space)
+        result.summary["supports_parameter_ablation"] = bool(_entry_search_space(entry))
         result.summary["variant_count"] = len(variants)
         return result
 
@@ -1191,11 +1277,24 @@ class ResearchToolbox:
         *,
         ticker: str | None = None,
         include_non_ok: bool = False,
+        include_non_competitive: bool = True,
     ) -> list[dict[str, Any]]:
         rows = self._results_db.list_research_evaluations(strategy=strategy_name, ticker=ticker)
         if include_non_ok:
             return rows
-        return [row for row in rows if row.get("status") != "invalid"]
+        filtered = [row for row in rows if row.get("status") != "invalid"]
+        if include_non_competitive:
+            return filtered
+        return [row for row in filtered if ResearchToolbox._is_competitive_memory_row(row)]
+
+    @staticmethod
+    def _is_competitive_memory_row(row: dict[str, Any]) -> bool:
+        if row.get("status") != "ok":
+            return False
+        constraints = row.get("constraints", {})
+        if constraints.get("passes_signal_floor") is False:
+            return False
+        return True
 
     @staticmethod
     def _sort_memory_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1317,7 +1416,10 @@ class ResearchToolbox:
             evaluation_window=evaluation_window,
         )
         aggregate_df = self._aggregate_sweep(detail_df, configs, min_total_signals=min_total_signals)
-        aggregate_df = _annotate_plateau_metrics(aggregate_df, parameter_space=entry.parameter_space)
+        aggregate_df = _annotate_plateau_metrics(
+            aggregate_df,
+            parameter_space=_entry_search_space(entry),
+        )
         summary.update(
             {
                 "ticker_count": len(enriched_frames),

@@ -124,6 +124,17 @@ class ParameterSpec:
             values.append(self.prior_center)
         return values
 
+    def search_values(self) -> list[Any]:
+        ordered: list[Any] = []
+        for preferred in (self.prior_center, self.default):
+            if preferred is None or preferred in ordered:
+                continue
+            ordered.append(preferred)
+        for value in self.legal_values():
+            if value not in ordered:
+                ordered.append(value)
+        return ordered
+
 
 @dataclass(slots=True)
 class GatingCondition:
@@ -229,6 +240,12 @@ class StrategySearchSpec:
     def parameter_space(self) -> dict[str, list[Any]]:
         return {
             parameter.name: parameter.legal_values()
+            for parameter in self.parameters
+        }
+
+    def search_space(self) -> dict[str, list[Any]]:
+        return {
+            parameter.name: parameter.search_values()
             for parameter in self.parameters
         }
 
