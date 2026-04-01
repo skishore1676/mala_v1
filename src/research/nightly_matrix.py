@@ -54,6 +54,15 @@ class NightlyResearchDefaults(BaseModel):
     base_cost_r: float = 0.08
     bootstrap_iters: int = 4000
     top_per_ticker: int = 1
+    broad_scout_max_stage: str = "M2"
+
+    @model_validator(mode="after")
+    def validate_defaults(self) -> "NightlyResearchDefaults":
+        if self.broad_scout_max_stage not in {"M2", "M5"}:
+            raise ValueError(
+                "broad_scout_max_stage must be one of: M2, M5"
+            )
+        return self
 
     def cli_args(self) -> list[str]:
         return [
@@ -97,6 +106,8 @@ class NightlyResearchDefaults(BaseModel):
             str(self.bootstrap_iters),
             "--top-per-ticker",
             str(self.top_per_ticker),
+            "--max-stage",
+            self.broad_scout_max_stage,
         ]
 
 

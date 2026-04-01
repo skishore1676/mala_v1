@@ -7,6 +7,8 @@ It now does two jobs in one pass:
 1. Run the broad nightly M1/M2 scout across the default strategy families and Tier 1 watchlist.
 2. Maintain the durable human review queue, refresh local charts, and execute approved follow-up actions under hard nightly caps.
 
+The broad scout now stops at `M2` by default. Deep `M3/M4/M5` work is reserved for queue-approved follow-up actions.
+
 ## Current Scope
 
 - Watchlist source: `config/nightly_regime_matrix.yaml`
@@ -71,6 +73,8 @@ Important files:
 - `deployment_candidates.json`
 - `playbook_catalog.json`
 - `nightly_matrix_manifest.json`
+
+Because the broad scout stops at `M2`, the top-level deployment/export JSONs may be empty on nights where no queued follow-up run emits fresh `M5`-level execution artifacts. That is expected; the queue/workbook/charts surface is the primary operating output for the scout.
 
 The nightly loop also writes a stable research-control area under:
 
@@ -226,3 +230,6 @@ The nightly matrix currently delegates to:
 Each family runner still writes its own dated run directory and can be executed
 independently, but the nightly matrix is now the canonical operator-facing
 entrypoint for the broad scout plus human-review follow-up loop.
+
+When invoked by the nightly matrix, family runners are launched with `--max-stage M2`.
+When invoked directly, they still default to the full `M1` through `M5` path.

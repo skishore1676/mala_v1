@@ -267,8 +267,10 @@ class LoopArtifactExporter:
         if not manifest_path.exists():
             raise FileNotFoundError(f"Missing research manifest at {manifest_path}")
         research_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        m4_entry = self._stage_entry(research_manifest, "M4")
-        m5_entry = self._stage_entry(research_manifest, "M5")
+        m4_entry = self._stage_entry(research_manifest, "M4", required=False)
+        m5_entry = self._stage_entry(research_manifest, "M5", required=False)
+        if m4_entry is None or m5_entry is None:
+            return []
         m4_summary = self._load_csv(run_dir, m4_entry, "summary")
         m4_detail = self._load_csv(run_dir, m4_entry, "detail")
         m5_detail = self._load_csv(run_dir, m5_entry, "detail")
@@ -594,11 +596,19 @@ class LoopArtifactExporter:
             filtered = filtered.filter(pl.col(column) == value)
         return filtered
 
-    def _stage_entry(self, research_manifest: dict[str, Any], stage: str) -> dict[str, Any]:
+    def _stage_entry(
+        self,
+        research_manifest: dict[str, Any],
+        stage: str,
+        *,
+        required: bool = True,
+    ) -> dict[str, Any] | None:
         for entry in research_manifest.get("stages", []):
             if entry.get("stage") == stage:
                 return entry
-        raise ValueError(f"Run manifest is missing stage {stage}")
+        if required:
+            raise ValueError(f"Run manifest is missing stage {stage}")
+        return None
 
     def _load_csv(self, run_dir: Path, stage_entry: dict[str, Any], artifact_name: str) -> pl.DataFrame:
         artifact_path = stage_entry.get("artifacts", {}).get(artifact_name)

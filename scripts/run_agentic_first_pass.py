@@ -73,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-cost-r", type=float, default=0.08)
     parser.add_argument("--bootstrap-iters", type=int, default=4000)
     parser.add_argument("--top-per-ticker", type=int, default=1)
+    parser.add_argument("--max-stage", choices=["M2", "M5"], default="M5")
     parser.add_argument("--out-dir", default="data/results/agentic_runs")
     return parser.parse_args()
 
@@ -546,97 +547,102 @@ def main() -> None:
             "gate_min_exp_r": args.gate_min_exp_r,
         },
     )
-    m3_detail = run_m3(
-        frames=frames,
-        windows=windows,
-        ratios=ratios,
-        metrics=metrics,
-        min_signals=args.min_signals,
-        m1_cost_bps=args.m1_cost_bps,
-        promoted_candidates=m2_promoted,
-    )
-    journal.record_stage(
-        stage=ResearchStage.M3_WALK_FORWARD,
-        result=ResearchToolResult(
-            tool_name="walk_forward",
-            summary={
-                "detail_rows": m3_detail.height,
-                "survivor_count": m2_promoted.height,
+    m3_detail = pl.DataFrame()
+    m4_detail = pl.DataFrame()
+    m4_summary = pl.DataFrame()
+    m5_execution = pl.DataFrame()
+    if args.max_stage == "M5":
+        m3_detail = run_m3(
+            frames=frames,
+            windows=windows,
+            ratios=ratios,
+            metrics=metrics,
+            min_signals=args.min_signals,
+            m1_cost_bps=args.m1_cost_bps,
+            promoted_candidates=m2_promoted,
+        )
+        journal.record_stage(
+            stage=ResearchStage.M3_WALK_FORWARD,
+            result=ResearchToolResult(
+                tool_name="walk_forward",
+                summary={
+                    "detail_rows": m3_detail.height,
+                    "survivor_count": m2_promoted.height,
+                },
+                artifacts={"detail": m3_detail},
+            ),
+            decision="promote" if not m3_detail.is_empty() else "gather_more_evidence",
+            rationale="Reviewed window-by-window OOS behavior for each convergence survivor before touching holdout data.",
+            next_action="Run untouched holdout validation." if not m3_detail.is_empty() else "Gather more walk-forward evidence.",
+            context={"m1_cost_bps": args.m1_cost_bps},
+        )
+        m4_detail, m4_summary, m5_execution = run_m4_m5(
+            frames=frames,
+            metrics=metrics,
+            promoted_candidates=m2_promoted,
+            start=args.start,
+            calibration_end=args.calibration_end,
+            holdout_start=args.holdout_start,
+            holdout_end=args.holdout_end,
+            ratios=ratios,
+            cost_grid_bps=cost_grid_bps,
+            min_calibration_signals=args.min_calibration_signals,
+            min_holdout_signals=args.min_holdout_signals,
+            base_cost_r=args.base_cost_r,
+            bootstrap_iters=args.bootstrap_iters,
+        )
+        m4_promoted = promoted_candidates_from_holdout(m4_summary) if not m4_summary.is_empty() else pl.DataFrame()
+        journal.record_stage(
+            stage=ResearchStage.M4_HOLDOUT,
+            result=ResearchToolResult(
+                tool_name="holdout_validation",
+                summary={
+                    "detail_rows": m4_detail.height,
+                    "promoted_count": m4_promoted.height,
+                },
+                artifacts={
+                    "detail": m4_detail,
+                    "summary": m4_summary,
+                    "promoted": m4_promoted,
+                },
+            ),
+            decision="promote" if not m4_promoted.is_empty() else "retune",
+            rationale="Evaluated the untouched holdout segment using calibration-selected ratios and friction stress.",
+            next_action="Run execution mapping on holdout survivors." if not m4_promoted.is_empty() else "Retune or reject candidates that failed holdout.",
+            context={
+                "min_calibration_signals": args.min_calibration_signals,
+                "min_holdout_signals": args.min_holdout_signals,
             },
-            artifacts={"detail": m3_detail},
-        ),
-        decision="promote" if not m3_detail.is_empty() else "gather_more_evidence",
-        rationale="Reviewed window-by-window OOS behavior for each convergence survivor before touching holdout data.",
-        next_action="Run untouched holdout validation." if not m3_detail.is_empty() else "Gather more walk-forward evidence.",
-        context={"m1_cost_bps": args.m1_cost_bps},
-    )
-    m4_detail, m4_summary, m5_execution = run_m4_m5(
-        frames=frames,
-        metrics=metrics,
-        promoted_candidates=m2_promoted,
-        start=args.start,
-        calibration_end=args.calibration_end,
-        holdout_start=args.holdout_start,
-        holdout_end=args.holdout_end,
-        ratios=ratios,
-        cost_grid_bps=cost_grid_bps,
-        min_calibration_signals=args.min_calibration_signals,
-        min_holdout_signals=args.min_holdout_signals,
-        base_cost_r=args.base_cost_r,
-        bootstrap_iters=args.bootstrap_iters,
-    )
-    m4_promoted = promoted_candidates_from_holdout(m4_summary) if not m4_summary.is_empty() else pl.DataFrame()
-    journal.record_stage(
-        stage=ResearchStage.M4_HOLDOUT,
-        result=ResearchToolResult(
-            tool_name="holdout_validation",
-            summary={
-                "detail_rows": m4_detail.height,
-                "promoted_count": m4_promoted.height,
-            },
-            artifacts={
-                "detail": m4_detail,
-                "summary": m4_summary,
-                "promoted": m4_promoted,
-            },
-        ),
-        decision="promote" if not m4_promoted.is_empty() else "retune",
-        rationale="Evaluated the untouched holdout segment using calibration-selected ratios and friction stress.",
-        next_action="Run execution mapping on holdout survivors." if not m4_promoted.is_empty() else "Retune or reject candidates that failed holdout.",
-        context={
-            "min_calibration_signals": args.min_calibration_signals,
-            "min_holdout_signals": args.min_holdout_signals,
-        },
-    )
-    max_mc_prob = (
-        float(m5_execution.get_column("mc_prob_positive_exp").max())
-        if not m5_execution.is_empty()
-        else None
-    )
-    m5_decision = (
-        "promote"
-        if max_mc_prob is not None and max_mc_prob >= 0.55
-        else "gather_more_evidence" if not m5_execution.is_empty() else "kill"
-    )
-    journal.record_stage(
-        stage=ResearchStage.M5_EXECUTION,
-        result=ResearchToolResult(
-            tool_name="execution_mapping",
-            summary={
-                "mapped_count": m5_execution.height,
-                "max_mc_prob_positive_exp": max_mc_prob,
-            },
-            artifacts={"detail": m5_execution},
-        ),
-        decision=m5_decision,
-        rationale="Mapped holdout survivors into practical option structures and stress-tested execution robustness.",
-        next_action=(
-            "Candidate is execution-robust enough for the next promotion step."
-            if m5_decision == "promote"
-            else "Collect more execution evidence or retune before any live trial."
-        ),
-        context={"base_cost_r": args.base_cost_r, "bootstrap_iters": args.bootstrap_iters},
-    )
+        )
+        max_mc_prob = (
+            float(m5_execution.get_column("mc_prob_positive_exp").max())
+            if not m5_execution.is_empty()
+            else None
+        )
+        m5_decision = (
+            "promote"
+            if max_mc_prob is not None and max_mc_prob >= 0.55
+            else "gather_more_evidence" if not m5_execution.is_empty() else "kill"
+        )
+        journal.record_stage(
+            stage=ResearchStage.M5_EXECUTION,
+            result=ResearchToolResult(
+                tool_name="execution_mapping",
+                summary={
+                    "mapped_count": m5_execution.height,
+                    "max_mc_prob_positive_exp": max_mc_prob,
+                },
+                artifacts={"detail": m5_execution},
+            ),
+            decision=m5_decision,
+            rationale="Mapped holdout survivors into practical option structures and stress-tested execution robustness.",
+            next_action=(
+                "Candidate is execution-robust enough for the next promotion step."
+                if m5_decision == "promote"
+                else "Collect more execution evidence or retune before any live trial."
+            ),
+            context={"base_cost_r": args.base_cost_r, "bootstrap_iters": args.bootstrap_iters},
+        )
 
     write_outputs(
         out_dir=out_dir,

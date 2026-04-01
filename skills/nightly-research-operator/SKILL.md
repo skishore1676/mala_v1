@@ -63,6 +63,9 @@ This skill is for operations, not strategy invention. Use it when the job is "ma
 - Nightly family sweeps can run for a long time with little or no terminal output.
 - Do not kill or restart the nightly matrix just because stdout is quiet for several minutes.
 - Treat the process as alive if the parent nightly runner or a family subprocess is still present and consuming time or CPU.
+- The broad nightly scout is intentionally `M1/M2` only.
+- Do not treat the absence of fresh `M3/M4/M5` artifacts in the broad family runs as a failure.
+- Deep validation belongs to queue-approved follow-up runs.
 - Zero survivors is a valid research outcome.
 - Do not treat empty M1 shortlists, empty M2 convergence results, or empty later-stage CSVs as fatal by default.
 - Even on a zero-survivor night, the operator must still leave behind an initialized review surface:
@@ -75,6 +78,7 @@ This skill is for operations, not strategy invention. Use it when the job is "ma
   - Only refresh observational fields unless the human edited the row.
 - The queue CSV is the source of truth for human decisions. The workbook/CSV bundle is only a projection.
 - Prefer continuing the nightly loop with explicit zero-result artifacts over crashing the whole run.
+- If you are validating queue execution bugs after a full scout has already finished, prefer replaying `HumanReviewQueueManager.refresh_queue(...)` against the completed bundle instead of rerunning every family sweep.
 
 ## Human Review Contract
 

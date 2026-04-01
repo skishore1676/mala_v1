@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -132,7 +133,10 @@ def test_run_family_research_streams_output_to_log(tmp_path: Path, monkeypatch) 
         "\n".join(
             [
                 "#!/usr/bin/env python3",
+                "import sys",
                 "from pathlib import Path",
+                "assert '--max-stage' in sys.argv",
+                "assert sys.argv[sys.argv.index('--max-stage') + 1] == 'M2'",
                 "print('line-1')",
                 "print('line-2')",
                 "out_dir = Path('family_output').resolve()",
@@ -157,6 +161,87 @@ def test_run_family_research_streams_output_to_log(tmp_path: Path, monkeypatch) 
     log_text = log_path.read_text(encoding="utf-8")
     assert "line-1" in log_text
     assert f"OUT_DIR={run_dir}" in log_text
+
+
+def test_run_nightly_regime_matrix_merges_m2_only_scout_into_queue(tmp_path: Path) -> None:
+    config = NightlyRegimeMatrixConfig(enabled_strategy_families=["market_impulse"])
+    config.research_control_root = str(tmp_path / "control")
+
+    def fake_family_runner(
+        family: str,
+        loaded_config: NightlyRegimeMatrixConfig,
+        bundle_dir: Path,
+    ) -> tuple[Path, Path]:
+        run_dir = bundle_dir / family
+        run_dir.mkdir(parents=True, exist_ok=True)
+        log_path = bundle_dir / "logs" / f"{family}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"OUT_DIR={run_dir}\n", encoding="utf-8")
+        (run_dir / "m1_top_candidates.csv").write_text(
+            "\n".join(
+                [
+                    "ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,avg_test_exp_r,pct_positive_oos_windows,oos_windows,oos_signals",
+                    "SPY,Market Impulse (Cross & Reclaim),short,5,60,1h,0.12,0.67,7,140",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_dir / "m2_gate_report.csv").write_text(
+            "\n".join(
+                [
+                    "ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,passes_all_gates,decision,observed_cost_points,min_oos_windows,min_oos_signals,min_pct_positive_oos_windows,min_avg_test_exp_r,mean_avg_test_exp_r,mean_pct_positive_oos_windows,mean_test_confidence",
+                    "SPY,Market Impulse (Cross & Reclaim),short,5,60,1h,true,promote_to_holdout,3,7,140,0.67,0.11,0.14,0.70,0.55",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest = {
+            "stages": [
+                {
+                    "stage": "M1",
+                    "decision": "promote",
+                    "recorded_at": "2026-04-01T01:00:00+00:00",
+                    "artifacts": {
+                        "top_candidates": str(run_dir / "m1_top_candidates.csv"),
+                    },
+                    "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+                },
+                {
+                    "stage": "M2",
+                    "decision": "promote",
+                    "recorded_at": "2026-04-01T01:10:00+00:00",
+                    "artifacts": {
+                        "gate_report": str(run_dir / "m2_gate_report.csv"),
+                    },
+                    "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+                },
+            ]
+        }
+        (run_dir / "research_manifest.json").write_text(
+            json.dumps(manifest, indent=2),
+            encoding="utf-8",
+        )
+        return run_dir, log_path
+
+    result = run_nightly_regime_matrix(
+        config,
+        bundle_dir=tmp_path / "bundle",
+        family_runner=fake_family_runner,
+    )
+
+    deployment_candidates = json.loads(result.deployment_candidates_path.read_text(encoding="utf-8"))
+    queue_rows = _read_csv_rows(result.review_queue_path)
+
+    assert deployment_candidates["candidates"] == []
+    assert len(queue_rows) == 1
+    assert queue_rows[0]["ticker"] == "SPY"
+    assert queue_rows[0]["queue_status"] == "NEW"
+    assert queue_rows[0]["passes_m1"] == "True"
+    assert queue_rows[0]["passes_m2"] == "True"
+    assert queue_rows[0]["passes_m3"] == "False"
+    assert queue_rows[0]["latest_stage_reached"] == "M2"
 
 
 def test_run_family_research_failure_references_log(tmp_path: Path, monkeypatch) -> None:
@@ -199,6 +284,12 @@ def test_nightly_regime_matrix_default_watchlist_includes_tier1_single_names() -
     config = NightlyRegimeMatrixConfig()
 
     assert {"SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL"} <= set(config.watchlist)
+    assert config.defaults.broad_scout_max_stage == "M2"
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _write_run(

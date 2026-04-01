@@ -31,6 +31,7 @@ def main() -> None:
     args = parse_args()
     config = load_nightly_regime_matrix_config(args.config)
     result = run_nightly_regime_matrix(config, bundle_dir=args.bundle_dir)
+    print(f"BROAD_SCOUT_MAX_STAGE={config.defaults.broad_scout_max_stage}")
     print(f"BUNDLE_DIR={result.bundle_dir}")
     for family, run_dir in sorted(result.run_dirs.items()):
         print(f"RUN_DIR_{family.upper()}={run_dir}")

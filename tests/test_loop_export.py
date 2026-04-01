@@ -190,6 +190,49 @@ def test_loop_export_treats_empty_stage_csvs_as_no_survivor_run(tmp_path: Path) 
     assert playbook_payload["contexts"]["SPY|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
 
 
+def test_loop_export_allows_m2_only_research_manifests(tmp_path: Path) -> None:
+    run_dir = tmp_path / "market_impulse_run"
+    run_dir.mkdir()
+    manifest = {
+        "stages": [
+            {
+                "stage": "M1",
+                "decision": "promote",
+                "recorded_at": "2026-04-01T01:00:00+00:00",
+                "artifacts": {
+                    "top_candidates": str(run_dir / "m1_top_candidates.csv"),
+                },
+                "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+            },
+            {
+                "stage": "M2",
+                "decision": "promote",
+                "recorded_at": "2026-04-01T01:10:00+00:00",
+                "artifacts": {
+                    "gate_report": str(run_dir / "m2_gate_report.csv"),
+                },
+                "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+            },
+        ]
+    }
+    (run_dir / "research_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    out_dir = tmp_path / "loop_artifacts"
+    exporter = LoopArtifactExporter()
+    candidates_path, playbook_path = exporter.export_runs(
+        [run_dir],
+        out_dir=out_dir,
+        watchlist=["SPY"],
+        enabled_strategy_families=["market_impulse"],
+    )
+
+    candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+    playbook_payload = json.loads(playbook_path.read_text(encoding="utf-8"))
+
+    assert candidates_payload["candidates"] == []
+    assert playbook_payload["contexts"]["SPY|bearish_trend_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
+
+
 def _write_run(
     run_dir: Path,
     *,
