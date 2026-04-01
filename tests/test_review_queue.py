@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import polars as pl
 
+import src.research.review_queue as review_queue_module
 from src.research.nightly_matrix import NightlyRegimeMatrixConfig
 from src.research.review_queue import (
     HumanReviewQueueManager,
@@ -622,3 +623,97 @@ def test_write_frame_if_not_empty_stringifies_nested_values(tmp_path: Path) -> N
     assert "QQQ" in text
     assert '""window"": 60' in text
     assert "[1, 2, 3]" in text
+
+
+def test_execute_retune_loads_per_neighbor_and_allows_gated_schema_differences(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path)
+
+    class _DummyEntry:
+        pass
+
+    class _DummyStrategy:
+        required_features = {"timestamp"}
+        feature_requests: tuple[str, ...] = ()
+
+    load_calls: list[str] = []
+    build_calls: list[dict[str, object]] = []
+    combined_frames: list[pl.DataFrame] = []
+
+    monkeypatch.setattr(manager.registry, "catalog_entry", lambda strategy_name, params=None: _DummyEntry())
+    monkeypatch.setattr(
+        review_queue_module,
+        "build_neighbor_configs",
+        lambda entry, base_config, max_configs: [
+            {"vpoc_proximity_pct": 0.002, "use_volume_filter": True, "volume_multiplier": 1.3},
+            {"vpoc_proximity_pct": 0.002, "use_volume_filter": False},
+        ],
+    )
+    monkeypatch.setattr(
+        manager.registry,
+        "build",
+        lambda strategy_name, params=None: build_calls.append(dict(params or {})) or _DummyStrategy(),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_load_enriched_frame_for_strategy",
+        lambda **kwargs: load_calls.append(str(kwargs["ticker"])) or _sample_opening_drive_frame(str(kwargs["ticker"])),
+    )
+    monkeypatch.setattr(
+        review_queue_module,
+        "run_walk_forward_for_strategies",
+        lambda **kwargs: [{"direction": "short", "window_idx": 1}],
+    )
+    monkeypatch.setattr(
+        review_queue_module,
+        "aggregate_walk_forward",
+        lambda rows: pl.DataFrame(
+            [
+                {
+                    "ticker": "TSLA",
+                    "strategy": "Jerk-Pivot Momentum (tight)",
+                    "direction": "short",
+                    "avg_test_exp_r": 0.2,
+                    "pct_positive_oos_windows": 0.7,
+                    "oos_windows": 6,
+                    "oos_signals": 100,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        review_queue_module,
+        "build_gate_report",
+        lambda **kwargs: combined_frames.append(kwargs["combined"]) or pl.DataFrame([{"decision": "ok"}]),
+    )
+
+    result = manager._execute_retune(
+        row={
+            "ticker": "TSLA",
+            "strategy_family": "jerk_pivot_momentum",
+            "strategy": "Jerk-Pivot Momentum (tight)",
+            "direction": "short",
+            "config_json": json.dumps(
+                {
+                    "vpoc_proximity_pct": 0.002,
+                    "jerk_lookback": 10,
+                    "volume_multiplier": 1.3,
+                    "volume_ma_period": 20,
+                    "use_volume_filter": True,
+                    "use_time_filter": True,
+                    "session_start": "09:35",
+                    "session_end": "15:30",
+                }
+            ),
+        },
+        config=NightlyRegimeMatrixConfig(research_control_root=str(tmp_path / "control")),
+        artifact_dir=tmp_path / "retune",
+    )
+
+    assert result["latest_stage_decision"] == "retune_completed"
+    assert load_calls == ["TSLA", "TSLA"]
+    assert len(build_calls) == 2
+    assert len(combined_frames) == 1
+    assert "volume_multiplier" in combined_frames[0].columns

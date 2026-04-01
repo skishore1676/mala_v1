@@ -594,13 +594,6 @@ class HumanReviewQueueManager:
         base_config = self._queue_config_params(row)
         entry = self.registry.catalog_entry(strategy_name, base_config)
         neighbor_configs = build_neighbor_configs(entry, base_config, max_configs=8)
-        strategies = [self.registry.build(strategy_name, neighbor) for neighbor in neighbor_configs]
-        candidate_frame = self._load_enriched_frame_for_strategies(
-            ticker=str(row["ticker"]),
-            strategies=strategies,
-            start_date=config.defaults.start,
-            end_date=config.defaults.end,
-        )
         windows = build_windows(
             config.defaults.start,
             config.defaults.end,
@@ -612,7 +605,14 @@ class HumanReviewQueueManager:
 
         m1_records: list[dict[str, Any]] = []
         m2_frames: list[pl.DataFrame] = []
-        for neighbor, strategy in zip(neighbor_configs, strategies, strict=False):
+        for neighbor in neighbor_configs:
+            strategy = self.registry.build(strategy_name, neighbor)
+            candidate_frame = self._load_enriched_frame_for_strategy(
+                ticker=str(row["ticker"]),
+                strategy=strategy,
+                start_date=config.defaults.start,
+                end_date=config.defaults.end,
+            )
             walk_rows = run_walk_forward_for_strategies(
                 ticker=row["ticker"],
                 df=candidate_frame,
@@ -650,7 +650,7 @@ class HumanReviewQueueManager:
                 )
         m1_ranked = pl.DataFrame(m1_records) if m1_records else pl.DataFrame()
         m2_gate = build_gate_report(
-            combined=pl.concat(m2_frames, how="vertical") if m2_frames else pl.DataFrame(),
+            combined=pl.concat(m2_frames, how="diagonal_relaxed") if m2_frames else pl.DataFrame(),
             cost_count=len(costs),
             gate_min_oos_windows=config.defaults.gate_min_oos_windows,
             gate_min_oos_signals=config.defaults.gate_min_oos_signals,
@@ -748,7 +748,7 @@ class HumanReviewQueueManager:
                 )
         m3_detail = pl.DataFrame(detail_rows) if detail_rows else pl.DataFrame()
         m2_gate = build_gate_report(
-            combined=pl.concat(convergence_frames, how="vertical") if convergence_frames else pl.DataFrame(),
+            combined=pl.concat(convergence_frames, how="diagonal_relaxed") if convergence_frames else pl.DataFrame(),
             cost_count=len(costs),
             gate_min_oos_windows=config.defaults.gate_min_oos_windows,
             gate_min_oos_signals=config.defaults.gate_min_oos_signals,
