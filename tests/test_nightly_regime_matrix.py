@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from src.research.loop_contracts import LOOP_ARTIFACT_SCHEMA_VERSION
+from src.research.nightly_matrix import (
+    NightlyRegimeMatrixConfig,
+    load_nightly_regime_matrix_config,
+    run_nightly_regime_matrix,
+)
+
+
+def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> None:
+    config_path = tmp_path / "nightly_regime_matrix.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "output_root: data/results/nightly_regime_matrix",
+                "watchlist:",
+                "  - iwm",
+                "  - tsla",
+                "enabled_strategy_families:",
+                "  - market_impulse",
+                "  - jerk_pivot_momentum",
+                "  - elastic_band_reversion",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = load_nightly_regime_matrix_config(config_path)
+    assert config.watchlist == ["IWM", "TSLA"]
+
+    def fake_family_runner(family: str, loaded_config: NightlyRegimeMatrixConfig, bundle_dir: Path) -> Path:
+        run_dir = bundle_dir / family
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if family == "market_impulse":
+            _write_run(
+                run_dir,
+                strategy="Market Impulse (Cross & Reclaim)",
+                ticker="IWM",
+                direction="short",
+                m5_decision="promote",
+                m4_summary_header="ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,observed_cost_points,min_holdout_signals,min_holdout_exp_r,mean_holdout_exp_r,passes_all_cost_gates,passes_holdout,decision\n",
+                m4_summary_row="IWM,Market Impulse (Cross & Reclaim),short,5,60,1h,3,117,0.3195,0.3786,true,true,promote_to_execution_mapping\n",
+                m4_detail_header="ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,cost_bps,selected_ratio,calib_signals,calib_exp_r,holdout_signals,holdout_confidence,holdout_exp_r,passes_cost_gate\n",
+                m4_detail_rows=[
+                    "IWM,Market Impulse (Cross & Reclaim),short,5,60,1h,5.0,2.0,595,0.0533,117,0.5043,0.4323,true\n",
+                ],
+                m5_detail_header="ticker,strategy,direction,entry_buffer_minutes,entry_window_minutes,regime_timeframe,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
+                m5_detail_row="IWM,Market Impulse (Cross & Reclaim),short,5,60,1h,2.0,117,0.5043,0.4328,117.0,0.205046,-0.016752,0.206823,0.425053,0.936,-1.960005,24.198289,49.73124,10.485098,put_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
+            )
+        elif family == "jerk_pivot_momentum":
+            _write_run(
+                run_dir,
+                strategy="Jerk-Pivot Momentum (tight)",
+                ticker="TSLA",
+                direction="long",
+                m5_decision="promote",
+                m4_summary_header="ticker,strategy,direction,vpoc_proximity_pct,jerk_lookback,volume_multiplier,volume_ma_period,use_volume_filter,use_time_filter,session_start,session_end,observed_cost_points,min_holdout_signals,min_holdout_exp_r,mean_holdout_exp_r,passes_all_cost_gates,passes_holdout,decision\n",
+                m4_summary_row="TSLA,Jerk-Pivot Momentum (tight),long,0.002,10,1.3,20,true,true,09:35,15:30,3,64,0.2211,0.3012,true,true,promote_to_execution_mapping\n",
+                m4_detail_header="ticker,strategy,direction,vpoc_proximity_pct,jerk_lookback,volume_multiplier,volume_ma_period,use_volume_filter,use_time_filter,session_start,session_end,cost_bps,selected_ratio,calib_signals,calib_exp_r,holdout_signals,holdout_confidence,holdout_exp_r,passes_cost_gate\n",
+                m4_detail_rows=[
+                    "TSLA,Jerk-Pivot Momentum (tight),long,0.002,10,1.3,20,true,true,09:35,15:30,5.0,1.5,222,0.1811,64,0.6021,0.3111,true\n",
+                ],
+                m5_detail_header="ticker,strategy,direction,vpoc_proximity_pct,jerk_lookback,volume_multiplier,volume_ma_period,use_volume_filter,use_time_filter,session_start,session_end,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
+                m5_detail_row="TSLA,Jerk-Pivot Momentum (tight),long,0.002,10,1.3,20,true,true,09:35,15:30,1.5,64,0.6021,0.4111,64.0,0.298,-0.022,0.301,0.544,0.811,-1.1,12.2,26.4,4.8,long_call,7-21,0.35-0.55,09:45-14:30,2.0R,-35% premium\n",
+            )
+        else:
+            _write_run(
+                run_dir,
+                strategy="Elastic Band Reversion",
+                ticker="IWM",
+                direction="long",
+                m5_decision="gather_more_evidence",
+                m4_summary_header="ticker,strategy,direction,z_score_threshold,z_score_window,use_directional_mass,observed_cost_points,min_holdout_signals,min_holdout_exp_r,mean_holdout_exp_r,passes_all_cost_gates,passes_holdout,decision\n",
+                m4_summary_row="IWM,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,3,42,0.1313,0.1621,true,true,promote_to_execution_mapping\n",
+                m4_detail_header="ticker,strategy,direction,z_score_threshold,z_score_window,use_directional_mass,cost_bps,selected_ratio,calib_signals,calib_exp_r,holdout_signals,holdout_confidence,holdout_exp_r,passes_cost_gate\n",
+                m4_detail_rows=[
+                    "IWM,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,5.0,1.25,321,0.0812,42,0.5476,0.1901,true\n",
+                ],
+                m5_detail_header="ticker,strategy,direction,z_score_threshold,z_score_window,use_directional_mass,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
+                m5_detail_row="IWM,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,1.25,42,0.5476,0.1521,42.0,-0.020538,-0.310285,-0.021474,0.25991,0.45275,-13.03198,-0.90191,10.916207,7.684631,call_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
+            )
+        return run_dir
+
+    result = run_nightly_regime_matrix(
+        config,
+        bundle_dir=tmp_path / "bundle",
+        family_runner=fake_family_runner,
+    )
+
+    deployment_candidates = json.loads(result.deployment_candidates_path.read_text(encoding="utf-8"))
+    playbook_catalog = json.loads(result.playbook_catalog_path.read_text(encoding="utf-8"))
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+
+    assert deployment_candidates["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert playbook_catalog["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert sorted(result.run_dirs) == [
+        "elastic_band_reversion",
+        "jerk_pivot_momentum",
+        "market_impulse",
+    ]
+    assert manifest["config_watchlist"] == ["IWM", "TSLA"]
+    assert manifest["contracts"]["deployment_candidates"]["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert playbook_catalog["contexts"]["TSLA|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_with_survivors"
+    assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["proposed_candidates"]
+    assert playbook_catalog["contexts"]["TSLA|bearish_mean_reversion_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
+
+
+def _write_run(
+    run_dir: Path,
+    *,
+    strategy: str,
+    ticker: str,
+    direction: str,
+    m5_decision: str,
+    m4_summary_header: str,
+    m4_summary_row: str,
+    m4_detail_header: str,
+    m4_detail_rows: list[str],
+    m5_detail_header: str,
+    m5_detail_row: str,
+) -> None:
+    (run_dir / "M4_holdout_validation_summary.csv").write_text(
+        m4_summary_header + m4_summary_row,
+        encoding="utf-8",
+    )
+    (run_dir / "M4_holdout_validation_detail.csv").write_text(
+        m4_detail_header + "".join(m4_detail_rows),
+        encoding="utf-8",
+    )
+    (run_dir / "M5_execution_mapping_detail.csv").write_text(
+        m5_detail_header + m5_detail_row,
+        encoding="utf-8",
+    )
+    manifest = {
+        "stages": [
+            {
+                "stage": "M4",
+                "decision": "promote",
+                "recorded_at": "2026-03-31T19:55:58.630829+00:00",
+                "artifacts": {
+                    "summary": str(run_dir / "M4_holdout_validation_summary.csv"),
+                    "detail": str(run_dir / "M4_holdout_validation_detail.csv"),
+                },
+                "context": {"strategy_family": strategy, "ticker": ticker, "direction": direction},
+            },
+            {
+                "stage": "M5",
+                "decision": m5_decision,
+                "recorded_at": "2026-03-31T19:55:58.631909+00:00",
+                "artifacts": {
+                    "detail": str(run_dir / "M5_execution_mapping_detail.csv"),
+                },
+                "context": {"strategy_family": strategy, "ticker": ticker, "direction": direction},
+            },
+        ]
+    }
+    (run_dir / "research_manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )

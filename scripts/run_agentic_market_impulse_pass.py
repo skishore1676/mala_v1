@@ -538,7 +538,12 @@ def main() -> None:
             f"M5={m5_execution.height}"
         ),
     )
-    LoopArtifactExporter().export_runs([out_dir], out_dir=out_dir)
+    LoopArtifactExporter().export_runs(
+        [out_dir],
+        out_dir=out_dir,
+        watchlist=args.tickers,
+        enabled_strategy_families=["market_impulse"],
+    )
 
 
 if __name__ == "__main__":

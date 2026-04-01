@@ -1,0 +1,33 @@
+schema_version: 1
+output_root: data/results/nightly_regime_matrix
+watchlist:
+  - SPY
+  - QQQ
+  - IWM
+  - TSLA
+  - PLTR
+enabled_strategy_families:
+  - market_impulse
+  - jerk_pivot_momentum
+  - elastic_band_reversion
+defaults:
+  start: 2024-01-02
+  end: 2026-02-28
+  calibration_end: 2025-11-30
+  holdout_start: 2025-12-01
+  holdout_end: 2026-02-28
+  train_months: 6
+  test_months: 3
+  ratios: "1.0,1.25,1.5,2.0"
+  m1_cost_bps: 8.0
+  cost_grid_bps: "5,8,12"
+  min_signals: 15
+  gate_min_oos_windows: 6
+  gate_min_oos_signals: 120
+  gate_min_pct_positive: 0.55
+  gate_min_exp_r: 0.0
+  min_calibration_signals: 40
+  min_holdout_signals: 20
+  base_cost_r: 0.08
+  bootstrap_iters: 4000
+  top_per_ticker: 1

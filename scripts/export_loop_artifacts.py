@@ -26,6 +26,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Output directory for deployment_candidates.json and playbook_catalog.json. Defaults to the single run directory if exactly one is provided.",
     )
+    parser.add_argument(
+        "--watchlist",
+        nargs="+",
+        default=None,
+        help="Optional explicit watchlist for full matrix exports.",
+    )
+    parser.add_argument(
+        "--enabled-strategy-family",
+        action="append",
+        dest="enabled_strategy_families",
+        default=None,
+        help="Optional strategy family to mark as researched. Can be repeated.",
+    )
     return parser.parse_args()
 
 
@@ -38,7 +51,12 @@ def main() -> None:
     else:
         out_dir = Path("data/results/loop_exports/latest")
     exporter = LoopArtifactExporter()
-    candidates_path, playbook_path = exporter.export_runs(args.run_dirs, out_dir=out_dir)
+    candidates_path, playbook_path = exporter.export_runs(
+        args.run_dirs,
+        out_dir=out_dir,
+        watchlist=args.watchlist,
+        enabled_strategy_families=args.enabled_strategy_families,
+    )
     print(f"DEPLOYMENT_CANDIDATES={candidates_path}")
     print(f"PLAYBOOK_CATALOG={playbook_path}")
 

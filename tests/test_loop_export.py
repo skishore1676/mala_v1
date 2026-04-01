@@ -3,6 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from src.research.loop_contracts import (
+    DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+    PLAYBOOK_CATALOG_CONTRACT_NAME,
+    LOOP_ARTIFACT_SCHEMA_VERSION,
+    validate_contract_metadata,
+)
 from src.research.loop_export import LoopArtifactExporter
 
 
@@ -43,10 +51,28 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
 
     out_dir = tmp_path / "loop_artifacts"
     exporter = LoopArtifactExporter()
-    candidates_path, playbook_path = exporter.export_runs([market_run, elastic_run], out_dir=out_dir)
+    candidates_path, playbook_path = exporter.export_runs(
+        [market_run, elastic_run],
+        out_dir=out_dir,
+        watchlist=["QQQ", "NVDA", "IWM"],
+        enabled_strategy_families=["market_impulse", "jerk_pivot_momentum", "elastic_band_reversion"],
+    )
 
     candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
     playbook_payload = json.loads(playbook_path.read_text(encoding="utf-8"))
+
+    validate_contract_metadata(
+        candidates_payload,
+        expected_contract_name=DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+    )
+    validate_contract_metadata(
+        playbook_payload,
+        expected_contract_name=PLAYBOOK_CATALOG_CONTRACT_NAME,
+    )
+    assert candidates_payload["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert playbook_payload["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert candidates_payload["watchlist"] == ["IWM", "NVDA", "QQQ"]
+    assert playbook_payload["watchlist"] == ["IWM", "NVDA", "QQQ"]
 
     assert {candidate["surface_class"] for candidate in candidates_payload["candidates"]} == {"supported", "proposed"}
 
@@ -68,12 +94,48 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     assert "Spread-aware execution stress and live monitoring" in elastic_candidate["manifest"]["source"]["metadata"]["required_bhiksha_capabilities"]
 
     market_context = playbook_payload["contexts"]["QQQ|bearish_trend_intraday|intraday"]
+    assert market_context["coverage_status"] == "researched_with_survivors"
+    assert market_context["covered_by_strategy_families"] == ["market_impulse", "jerk_pivot_momentum"]
     assert market_context["supported_candidates"][0]["candidate_id"] == market_candidate["candidate_id"]
     assert market_context["proposed_candidates"] == []
 
     elastic_context = playbook_payload["contexts"]["NVDA|bullish_mean_reversion_intraday|intraday"]
+    assert elastic_context["coverage_status"] == "researched_with_survivors"
+    assert elastic_context["covered_by_strategy_families"] == ["elastic_band_reversion"]
     assert elastic_context["supported_candidates"] == []
     assert elastic_context["proposed_candidates"][0]["candidate_id"] == elastic_candidate["candidate_id"]
+
+    empty_trend_context = playbook_payload["contexts"]["IWM|bullish_trend_intraday|intraday"]
+    assert empty_trend_context["coverage_status"] == "researched_no_survivors"
+    assert empty_trend_context["supported_candidates"] == []
+    assert empty_trend_context["proposed_candidates"] == []
+
+    empty_reversion_context = playbook_payload["contexts"]["QQQ|bullish_mean_reversion_intraday|intraday"]
+    assert empty_reversion_context["coverage_status"] == "researched_no_survivors"
+    assert empty_reversion_context["covered_by_strategy_families"] == ["elastic_band_reversion"]
+
+
+def test_validate_contract_metadata_rejects_missing_or_wrong_fields() -> None:
+    with pytest.raises(ValueError, match="Missing required contract_name"):
+        validate_contract_metadata({"schema_version": LOOP_ARTIFACT_SCHEMA_VERSION})
+
+    with pytest.raises(ValueError, match="Unexpected contract_name"):
+        validate_contract_metadata(
+            {
+                "contract_name": PLAYBOOK_CATALOG_CONTRACT_NAME,
+                "schema_version": LOOP_ARTIFACT_SCHEMA_VERSION,
+            },
+            expected_contract_name=DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+        )
+
+    with pytest.raises(ValueError, match="Unsupported schema_version"):
+        validate_contract_metadata(
+            {
+                "contract_name": DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+                "schema_version": 1,
+            },
+            expected_contract_name=DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+        )
 
 
 def _write_run(

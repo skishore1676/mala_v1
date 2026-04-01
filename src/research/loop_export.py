@@ -13,6 +13,11 @@ from typing import Any
 import polars as pl
 
 from src.config import PROJECT_ROOT
+from src.research.loop_contracts import (
+    DEPLOYMENT_CANDIDATES_CONTRACT_NAME,
+    PLAYBOOK_CATALOG_CONTRACT_NAME,
+    build_contract_metadata,
+)
 from src.strategy.factory import build_strategy, build_strategy_by_name
 
 
@@ -154,6 +159,20 @@ _BIAS_CONTEXTS = {
     ("elastic_band_reversion", "short"): "bearish_mean_reversion_intraday",
 }
 
+_ALL_BIAS_TEMPLATES = (
+    "bullish_trend_intraday",
+    "bullish_mean_reversion_intraday",
+    "bearish_trend_intraday",
+    "bearish_mean_reversion_intraday",
+)
+
+_CONTEXT_FAMILY_MAP = {
+    "bullish_trend_intraday": ("market_impulse", "jerk_pivot_momentum"),
+    "bullish_mean_reversion_intraday": ("elastic_band_reversion",),
+    "bearish_trend_intraday": ("market_impulse", "jerk_pivot_momentum"),
+    "bearish_mean_reversion_intraday": ("elastic_band_reversion",),
+}
+
 
 @dataclass(slots=True, frozen=True)
 class ExportCandidate:
@@ -199,24 +218,36 @@ class LoopArtifactExporter:
         run_dirs: list[str | Path],
         *,
         out_dir: str | Path,
+        watchlist: list[str] | None = None,
+        enabled_strategy_families: list[str] | None = None,
     ) -> tuple[Path, Path]:
         resolved_run_dirs = [Path(run_dir).resolve() for run_dir in run_dirs]
         candidates: list[ExportCandidate] = []
         for run_dir in resolved_run_dirs:
             candidates.extend(self._collect_run_candidates(run_dir))
         deduped = self._dedupe_candidates(candidates)
+        resolved_watchlist = self._resolve_watchlist(deduped, watchlist)
+        resolved_families = self._resolve_enabled_strategy_families(deduped, enabled_strategy_families)
         generated_at = datetime.now(UTC).isoformat()
         candidates_payload = {
-            "schema_version": 1,
+            **build_contract_metadata(DEPLOYMENT_CANDIDATES_CONTRACT_NAME),
             "generated_at": generated_at,
             "run_dirs": [self._relpath(path) for path in resolved_run_dirs],
+            "watchlist": resolved_watchlist,
+            "enabled_strategy_families": resolved_families,
             "candidates": [candidate.to_dict() for candidate in deduped],
         }
         playbook_payload = {
-            "schema_version": 1,
+            **build_contract_metadata(PLAYBOOK_CATALOG_CONTRACT_NAME),
             "generated_at": generated_at,
             "run_dirs": [self._relpath(path) for path in resolved_run_dirs],
-            "contexts": self._build_playbook_contexts(deduped),
+            "watchlist": resolved_watchlist,
+            "enabled_strategy_families": resolved_families,
+            "contexts": self._build_playbook_contexts(
+                deduped,
+                watchlist=resolved_watchlist,
+                enabled_strategy_families=resolved_families,
+            ),
         }
 
         target_dir = Path(out_dir)
@@ -382,30 +413,50 @@ class LoopArtifactExporter:
     def _candidate_sort_key(self, candidate: ExportCandidate) -> tuple[str, float]:
         return (candidate.source["run_date"], candidate.ranking_score)
 
-    def _build_playbook_contexts(self, candidates: list[ExportCandidate]) -> dict[str, dict[str, Any]]:
+    def _build_playbook_contexts(
+        self,
+        candidates: list[ExportCandidate],
+        *,
+        watchlist: list[str],
+        enabled_strategy_families: list[str],
+    ) -> dict[str, dict[str, Any]]:
         grouped: dict[str, list[ExportCandidate]] = {}
         for candidate in candidates:
             key = self._context_key(candidate.symbol, candidate.bias_template, candidate.horizon)
             grouped.setdefault(key, []).append(candidate)
 
         contexts: dict[str, dict[str, Any]] = {}
-        for key, grouped_candidates in sorted(grouped.items()):
-            supported = sorted(
-                (candidate for candidate in grouped_candidates if candidate.surface_class == "supported"),
-                key=lambda candidate: (-candidate.ranking_score, candidate.candidate_id),
-            )
-            proposed = sorted(
-                (candidate for candidate in grouped_candidates if candidate.surface_class == "proposed"),
-                key=lambda candidate: (-candidate.ranking_score, candidate.candidate_id),
-            )
-            first = grouped_candidates[0]
-            contexts[key] = {
-                "symbol": first.symbol,
-                "bias_template": first.bias_template,
-                "horizon": first.horizon,
-                "supported_candidates": [self._playbook_entry(candidate, rank + 1) for rank, candidate in enumerate(supported)],
-                "proposed_candidates": [self._playbook_entry(candidate, rank + 1) for rank, candidate in enumerate(proposed)],
-            }
+        for symbol in sorted(item.upper() for item in watchlist):
+            for bias_template in _ALL_BIAS_TEMPLATES:
+                key = self._context_key(symbol, bias_template, "intraday")
+                grouped_candidates = grouped.get(key, [])
+                supported = sorted(
+                    (candidate for candidate in grouped_candidates if candidate.surface_class == "supported"),
+                    key=lambda candidate: (-candidate.ranking_score, candidate.candidate_id),
+                )
+                proposed = sorted(
+                    (candidate for candidate in grouped_candidates if candidate.surface_class == "proposed"),
+                    key=lambda candidate: (-candidate.ranking_score, candidate.candidate_id),
+                )
+                covered_by_families = [
+                    family
+                    for family in _CONTEXT_FAMILY_MAP[bias_template]
+                    if family in enabled_strategy_families
+                ]
+                coverage_status = _coverage_status(
+                    supported=supported,
+                    proposed=proposed,
+                    covered_by_families=covered_by_families,
+                )
+                contexts[key] = {
+                    "symbol": symbol,
+                    "bias_template": bias_template,
+                    "horizon": "intraday",
+                    "coverage_status": coverage_status,
+                    "covered_by_strategy_families": covered_by_families,
+                    "supported_candidates": [self._playbook_entry(candidate, rank + 1) for rank, candidate in enumerate(supported)],
+                    "proposed_candidates": [self._playbook_entry(candidate, rank + 1) for rank, candidate in enumerate(proposed)],
+                }
         return contexts
 
     def _playbook_entry(self, candidate: ExportCandidate, rank: int) -> dict[str, Any]:
@@ -572,6 +623,20 @@ class LoopArtifactExporter:
         except ValueError:
             return str(path.resolve())
 
+    def _resolve_watchlist(self, candidates: list[ExportCandidate], explicit_watchlist: list[str] | None) -> list[str]:
+        if explicit_watchlist:
+            return sorted({symbol.upper() for symbol in explicit_watchlist})
+        return sorted({candidate.symbol.upper() for candidate in candidates})
+
+    def _resolve_enabled_strategy_families(
+        self,
+        candidates: list[ExportCandidate],
+        explicit_families: list[str] | None,
+    ) -> list[str]:
+        if explicit_families:
+            return sorted(set(explicit_families))
+        return sorted({candidate.strategy_key for candidate in candidates})
+
 
 @dataclass(slots=True, frozen=True)
 class _StrategyDescriptor:
@@ -683,6 +748,19 @@ def _parse_window(value: Any) -> tuple[str | None, str | None]:
         return None, None
     start_raw, end_raw = (part.strip() for part in raw.split("-", 1))
     return start_raw, end_raw
+
+
+def _coverage_status(
+    *,
+    supported: list[ExportCandidate],
+    proposed: list[ExportCandidate],
+    covered_by_families: list[str],
+) -> str:
+    if supported or proposed:
+        return "researched_with_survivors"
+    if covered_by_families:
+        return "researched_no_survivors"
+    return "not_covered_by_enabled_family"
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

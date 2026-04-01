@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run a first-pass multi-symbol research cycle for Elastic Band Reversion."""
+"""Run a first-pass multi-symbol research cycle for Jerk-Pivot Momentum."""
 
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
+from datetime import date
 from itertools import product
 from pathlib import Path
 import sys
@@ -14,6 +14,7 @@ import polars as pl
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.chronos.storage import LocalStorage
+from src.config import settings
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
@@ -34,13 +35,11 @@ from src.research.stages import (
 )
 from src.research.stages.candidates import build_candidate_strategy
 from src.research.tools import ResearchToolResult
-from src.strategy.base import required_feature_union
-from src.strategy.elastic_band_reversion import ElasticBandReversionStrategy
+from src.strategy.base import BaseStrategy, required_feature_union
+from src.strategy.jerk_pivot_momentum import JerkPivotMomentumStrategy
 
 
-DEFAULT_TICKERS = ["AAPL", "META", "TSLA", "QQQ", "IWM"]
-DEFAULT_RATIOS = [1.0, 1.25, 1.5, 2.0]
-DEFAULT_COSTS_BPS = [5.0, 8.0, 12.0]
+DEFAULT_TICKERS = ["SPY", "QQQ", "IWM", "TSLA", "PLTR"]
 
 
 def parse_csv_floats(value: str) -> list[float]:
@@ -63,12 +62,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ratios", default="1.0,1.25,1.5,2.0")
     parser.add_argument("--m1-cost-bps", type=float, default=8.0)
     parser.add_argument("--cost-grid-bps", default="5,8,12")
-    parser.add_argument("--min-signals", type=int, default=20)
+    parser.add_argument("--min-signals", type=int, default=15)
     parser.add_argument("--gate-min-oos-windows", type=int, default=6)
-    parser.add_argument("--gate-min-oos-signals", type=int, default=150)
-    parser.add_argument("--gate-min-pct-positive", type=float, default=0.60)
+    parser.add_argument("--gate-min-oos-signals", type=int, default=120)
+    parser.add_argument("--gate-min-pct-positive", type=float, default=0.55)
     parser.add_argument("--gate-min-exp-r", type=float, default=0.0)
-    parser.add_argument("--min-calibration-signals", type=int, default=50)
+    parser.add_argument("--min-calibration-signals", type=int, default=40)
     parser.add_argument("--min-holdout-signals", type=int, default=20)
     parser.add_argument("--base-cost-r", type=float, default=0.08)
     parser.add_argument("--bootstrap-iters", type=int, default=4000)
@@ -87,7 +86,7 @@ def fmt_float(value: object, digits: int = 4) -> str:
     return f"{float(value):+.{digits}f}"
 
 
-def fmt_param(row: dict[str, object], key: str, digits: int = 2) -> str:
+def fmt_param(row: dict[str, object], key: str, digits: int = 3) -> str:
     value = row.get(key)
     if value is None:
         return f"{key}=null"
@@ -98,19 +97,42 @@ def fmt_param(row: dict[str, object], key: str, digits: int = 2) -> str:
     return f"{key}={float(value):.{digits}f}"
 
 
-def elastic_configs() -> list[dict[str, object]]:
-    return [
-        {
-            "z_score_threshold": z_score_threshold,
-            "z_score_window": z_score_window,
-            "use_directional_mass": use_directional_mass,
-        }
-        for z_score_threshold, z_score_window, use_directional_mass in product(
-            [1.0, 1.25, 1.75, 2.0, 2.5, 3.0],
-            [120, 240, 360],
-            [True, False],
-        )
-    ]
+def jerk_pivot_configs() -> list[dict[str, object]]:
+    configs: list[dict[str, object]] = []
+    for vpoc_proximity_pct, jerk_lookback, use_volume_filter in product(
+        [0.0015, 0.002, 0.003],
+        [8, 10, 12],
+        [True, False],
+    ):
+        multipliers = [1.0, 1.1, 1.2, 1.3] if use_volume_filter else [1.0]
+        for volume_multiplier in multipliers:
+            configs.append(
+                {
+                    "vpoc_proximity_pct": vpoc_proximity_pct,
+                    "jerk_lookback": jerk_lookback,
+                    "volume_multiplier": volume_multiplier,
+                    "volume_ma_period": settings.volume_ma_period,
+                    "use_volume_filter": use_volume_filter,
+                    "use_time_filter": True,
+                    "session_start": "09:35",
+                    "session_end": "15:30",
+                }
+            )
+    return configs
+
+
+def build_jerk_pivot(config: dict[str, object]) -> BaseStrategy:
+    return JerkPivotMomentumStrategy(
+        vpoc_proximity_pct=float(config["vpoc_proximity_pct"]),
+        jerk_lookback=int(config["jerk_lookback"]),
+        volume_multiplier=float(config["volume_multiplier"]),
+        volume_ma_period=int(config["volume_ma_period"]),
+        use_volume_filter=bool(config["use_volume_filter"]),
+        use_time_filter=bool(config["use_time_filter"]),
+        session_start=str(config["session_start"]),
+        session_end=str(config["session_end"]),
+        strategy_label="Jerk-Pivot Momentum (tight)",
+    )
 
 
 def load_frames(
@@ -118,10 +140,12 @@ def load_frames(
     tickers: list[str],
     start: date,
     end: date,
+    configs: list[dict[str, object]],
 ) -> dict[str, pl.DataFrame]:
     storage = LocalStorage()
     physics = PhysicsEngine()
-    needed_features = required_feature_union([ElasticBandReversionStrategy(use_directional_mass=True)])
+    strategies = [build_jerk_pivot(config) for config in configs]
+    needed_features = required_feature_union(strategies)
 
     frames: dict[str, pl.DataFrame] = {}
     for ticker in tickers:
@@ -143,14 +167,18 @@ def run_m1(
     min_signals: int,
     m1_cost_bps: float,
     top_per_ticker: int,
+    configs: list[dict[str, object]],
 ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     detail_rows: list[dict[str, object]] = []
     aggregate_rows: list[dict[str, object]] = []
 
-    configs = elastic_configs()
     for idx, config in enumerate(configs, start=1):
-        strategy = ElasticBandReversionStrategy(**config)
-        log(f"M1_CONFIG {idx}/{len(configs)} {strategy.name}")
+        strategy = build_jerk_pivot(config)
+        log(
+            f"M1_CONFIG {idx}/{len(configs)} vpoc={config['vpoc_proximity_pct']} "
+            f"jl={config['jerk_lookback']} vol={config['volume_multiplier']} "
+            f"use_vol={config['use_volume_filter']}"
+        )
         for ticker, frame in frames.items():
             rows = run_walk_forward_for_strategies(
                 ticker=ticker,
@@ -227,11 +255,7 @@ def run_m2(
         rows: list[dict[str, object]] = []
         log(f"M2_COST_BPS {cost_bps}")
         for candidate in top_candidates.iter_rows(named=True):
-            strategy = ElasticBandReversionStrategy(
-                z_score_threshold=float(candidate["z_score_threshold"]),
-                z_score_window=int(candidate["z_score_window"]),
-                use_directional_mass=bool(candidate["use_directional_mass"]),
-            )
+            strategy = build_jerk_pivot(candidate)
             ticker = str(candidate["ticker"])
             walk_forward_rows = run_walk_forward_for_strategies(
                 ticker=ticker,
@@ -254,9 +278,14 @@ def run_m2(
                     {
                         **row,
                         "cost_bps": cost_bps,
-                        "z_score_threshold": float(candidate["z_score_threshold"]),
-                        "z_score_window": int(candidate["z_score_window"]),
-                        "use_directional_mass": bool(candidate["use_directional_mass"]),
+                        "vpoc_proximity_pct": float(candidate["vpoc_proximity_pct"]),
+                        "jerk_lookback": int(candidate["jerk_lookback"]),
+                        "volume_multiplier": float(candidate["volume_multiplier"]),
+                        "volume_ma_period": int(candidate["volume_ma_period"]),
+                        "use_volume_filter": bool(candidate["use_volume_filter"]),
+                        "use_time_filter": bool(candidate["use_time_filter"]),
+                        "session_start": str(candidate["session_start"]),
+                        "session_end": str(candidate["session_end"]),
                     }
                 )
         if rows:
@@ -308,9 +337,14 @@ def run_m3(
             rows.append(
                 {
                     **row,
-                    "z_score_threshold": candidate["z_score_threshold"],
-                    "z_score_window": candidate["z_score_window"],
-                    "use_directional_mass": candidate["use_directional_mass"],
+                    "vpoc_proximity_pct": float(candidate["vpoc_proximity_pct"]),
+                    "jerk_lookback": int(candidate["jerk_lookback"]),
+                    "volume_multiplier": float(candidate["volume_multiplier"]),
+                    "volume_ma_period": int(candidate["volume_ma_period"]),
+                    "use_volume_filter": bool(candidate["use_volume_filter"]),
+                    "use_time_filter": bool(candidate["use_time_filter"]),
+                    "session_start": str(candidate["session_start"]),
+                    "session_end": str(candidate["session_end"]),
                 }
             )
     return pl.DataFrame(rows) if rows else pl.DataFrame()
@@ -336,26 +370,17 @@ def run_m4_m5(
         promoted=promoted_candidates,
         ticker_frames=frames,
         metrics=metrics,
-        start_date=start,
+        calibration_start=start,
         calibration_end=calibration_end,
         holdout_start=holdout_start,
         holdout_end=holdout_end,
         ratios=ratios,
-        costs=cost_grid_bps,
+        cost_bps_grid=cost_grid_bps,
         min_calibration_signals=min_calibration_signals,
-        min_holdout_signals=min_holdout_signals,
     )
     holdout_detail = pl.DataFrame(holdout_rows) if holdout_rows else pl.DataFrame()
-    holdout_summary = (
-        summarize_holdout(holdout_detail, cost_count=len(cost_grid_bps))
-        if not holdout_detail.is_empty()
-        else pl.DataFrame()
-    )
-    execution_candidates = (
-        promoted_candidates_from_holdout(holdout_summary)
-        if not holdout_summary.is_empty()
-        else pl.DataFrame()
-    )
+    holdout_summary = summarize_holdout(holdout_detail, cost_count=len(cost_grid_bps)) if not holdout_detail.is_empty() else pl.DataFrame()
+    execution_candidates = promoted_candidates_from_holdout(holdout_summary) if not holdout_summary.is_empty() else pl.DataFrame()
     execution_rows = (
         run_execution_mapping_for_candidates(
             promoted=execution_candidates,
@@ -431,9 +456,10 @@ def write_summary(
                 [
                     str(row["ticker"]),
                     str(row["direction"]),
-                    fmt_param(row, "z_score_threshold"),
-                    fmt_param(row, "z_score_window", digits=0),
-                    fmt_param(row, "use_directional_mass"),
+                    fmt_param(row, "vpoc_proximity_pct"),
+                    fmt_param(row, "jerk_lookback", digits=0),
+                    fmt_param(row, "volume_multiplier"),
+                    fmt_param(row, "use_volume_filter"),
                     f"exp={fmt_float(row['avg_test_exp_r'])}",
                     f"pct={fmt_float(row['pct_positive_oos_windows'], digits=3)}",
                     f"n={int(row['oos_signals'])}",
@@ -447,9 +473,10 @@ def write_summary(
                 [
                     str(row["ticker"]),
                     str(row["direction"]),
-                    fmt_param(row, "z_score_threshold"),
-                    fmt_param(row, "z_score_window", digits=0),
-                    fmt_param(row, "use_directional_mass"),
+                    fmt_param(row, "vpoc_proximity_pct"),
+                    fmt_param(row, "jerk_lookback", digits=0),
+                    fmt_param(row, "volume_multiplier"),
+                    fmt_param(row, "use_volume_filter"),
                 ]
             )
         )
@@ -460,9 +487,10 @@ def write_summary(
                 [
                     str(row["ticker"]),
                     str(row["direction"]),
-                    fmt_param(row, "z_score_threshold"),
-                    fmt_param(row, "z_score_window", digits=0),
-                    fmt_param(row, "use_directional_mass"),
+                    fmt_param(row, "vpoc_proximity_pct"),
+                    fmt_param(row, "jerk_lookback", digits=0),
+                    fmt_param(row, "volume_multiplier"),
+                    fmt_param(row, "use_volume_filter"),
                 ]
             )
         )
@@ -475,12 +503,12 @@ def main() -> None:
     args = parse_args()
     ratios = parse_csv_floats(args.ratios)
     cost_grid_bps = parse_csv_floats(args.cost_grid_bps)
-    out_dir = create_run_dir(args.out_dir, "elastic_band")
+    out_dir = create_run_dir(args.out_dir, "jerk_pivot")
     journal = ResearchJournal(out_dir)
-
     metrics = MetricsCalculator()
     windows = build_windows(args.start, args.end, args.train_months, args.test_months)
-    frames = load_frames(tickers=args.tickers, start=args.start, end=args.end)
+    configs = jerk_pivot_configs()
+    frames = load_frames(tickers=args.tickers, start=args.start, end=args.end, configs=configs)
 
     m1_detail, m1_aggregate, m1_top = run_m1(
         frames=frames,
@@ -490,27 +518,21 @@ def main() -> None:
         min_signals=args.min_signals,
         m1_cost_bps=args.m1_cost_bps,
         top_per_ticker=args.top_per_ticker,
+        configs=configs,
     )
     journal.record_stage(
         stage=ResearchStage.M1_DISCOVERY,
         result=ResearchToolResult(
             tool_name="parameter_sweep",
-            summary={
-                "ticker_count": len(frames),
-                "aggregate_rows": m1_aggregate.height,
-                "top_candidates": m1_top.height,
-            },
-            artifacts={
-                "detail": m1_detail,
-                "aggregate": m1_aggregate,
-                "top_candidates": m1_top,
-            },
+            summary={"ticker_count": len(frames), "aggregate_rows": m1_aggregate.height, "top_candidates": m1_top.height},
+            artifacts={"detail": m1_detail, "aggregate": m1_aggregate, "top_candidates": m1_top},
         ),
         decision="promote" if not m1_top.is_empty() else "kill",
-        rationale="Completed bounded discovery sweep and selected the strongest per-ticker directional candidates for convergence.",
+        rationale="Completed bounded discovery sweep across Jerk-Pivot momentum parameters and kept the strongest per-ticker directional candidates.",
         next_action="Run convergence grid on the M1 shortlist.",
-        context={"strategy_family": "Elastic Band Reversion"},
+        context={"strategy_family": "Jerk-Pivot Momentum (tight)"},
     )
+
     m2_combined, m2_gate_report, m2_promoted = run_m2(
         frames=frames,
         windows=windows,
@@ -528,18 +550,11 @@ def main() -> None:
         stage=ResearchStage.M2_CONVERGENCE,
         result=ResearchToolResult(
             tool_name="convergence_grid",
-            summary={
-                "candidate_count": m2_gate_report.height,
-                "promoted_count": m2_promoted.height,
-            },
-            artifacts={
-                "combined": m2_combined,
-                "gate_report": m2_gate_report,
-                "promoted": m2_promoted,
-            },
+            summary={"candidate_count": m2_gate_report.height, "promoted_count": m2_promoted.height},
+            artifacts={"combined": m2_combined, "gate_report": m2_gate_report, "promoted": m2_promoted},
         ),
         decision="promote" if not m2_promoted.is_empty() else "retune",
-        rationale="Applied deterministic robustness gates across the friction grid and kept only candidates that survived all cost points.",
+        rationale="Applied deterministic robustness gates across the friction grid for Jerk-Pivot momentum candidates.",
         next_action="Run walk-forward review on M2 survivors." if not m2_promoted.is_empty() else "Retune or replace weak candidates before holdout.",
         context={
             "gate_min_oos_windows": args.gate_min_oos_windows,
@@ -548,6 +563,7 @@ def main() -> None:
             "gate_min_exp_r": args.gate_min_exp_r,
         },
     )
+
     m3_detail = run_m3(
         frames=frames,
         windows=windows,
@@ -561,17 +577,15 @@ def main() -> None:
         stage=ResearchStage.M3_WALK_FORWARD,
         result=ResearchToolResult(
             tool_name="walk_forward",
-            summary={
-                "detail_rows": m3_detail.height,
-                "survivor_count": m2_promoted.height,
-            },
+            summary={"detail_rows": m3_detail.height, "survivor_count": m2_promoted.height},
             artifacts={"detail": m3_detail},
         ),
         decision="promote" if not m3_detail.is_empty() else "gather_more_evidence",
-        rationale="Reviewed window-by-window OOS behavior for each convergence survivor before touching holdout data.",
+        rationale="Reviewed window-by-window OOS behavior for each Jerk-Pivot survivor before holdout.",
         next_action="Run untouched holdout validation." if not m3_detail.is_empty() else "Gather more walk-forward evidence.",
         context={"m1_cost_bps": args.m1_cost_bps},
     )
+
     m4_detail, m4_summary, m5_execution = run_m4_m5(
         frames=frames,
         metrics=metrics,
@@ -592,51 +606,27 @@ def main() -> None:
         stage=ResearchStage.M4_HOLDOUT,
         result=ResearchToolResult(
             tool_name="holdout_validation",
-            summary={
-                "detail_rows": m4_detail.height,
-                "promoted_count": m4_promoted.height,
-            },
-            artifacts={
-                "detail": m4_detail,
-                "summary": m4_summary,
-                "promoted": m4_promoted,
-            },
+            summary={"detail_rows": m4_detail.height, "promoted_count": m4_promoted.height},
+            artifacts={"detail": m4_detail, "summary": m4_summary, "promoted": m4_promoted},
         ),
         decision="promote" if not m4_promoted.is_empty() else "retune",
         rationale="Evaluated the untouched holdout segment using calibration-selected ratios and friction stress.",
         next_action="Run execution mapping on holdout survivors." if not m4_promoted.is_empty() else "Retune or reject candidates that failed holdout.",
-        context={
-            "min_calibration_signals": args.min_calibration_signals,
-            "min_holdout_signals": args.min_holdout_signals,
-        },
+        context={"min_calibration_signals": args.min_calibration_signals, "min_holdout_signals": args.min_holdout_signals},
     )
-    max_mc_prob = (
-        float(m5_execution.get_column("mc_prob_positive_exp").max())
-        if not m5_execution.is_empty()
-        else None
-    )
-    m5_decision = (
-        "promote"
-        if max_mc_prob is not None and max_mc_prob >= 0.55
-        else "gather_more_evidence" if not m5_execution.is_empty() else "kill"
-    )
+
+    max_mc_prob = float(m5_execution.get_column("mc_prob_positive_exp").max()) if not m5_execution.is_empty() else None
+    m5_decision = "promote" if max_mc_prob is not None and max_mc_prob >= 0.55 else "gather_more_evidence" if not m5_execution.is_empty() else "kill"
     journal.record_stage(
         stage=ResearchStage.M5_EXECUTION,
         result=ResearchToolResult(
             tool_name="execution_mapping",
-            summary={
-                "mapped_count": m5_execution.height,
-                "max_mc_prob_positive_exp": max_mc_prob,
-            },
+            summary={"mapped_count": m5_execution.height, "max_mc_prob_positive_exp": max_mc_prob},
             artifacts={"detail": m5_execution},
         ),
         decision=m5_decision,
         rationale="Mapped holdout survivors into practical option structures and stress-tested execution robustness.",
-        next_action=(
-            "Candidate is execution-robust enough for the next promotion step."
-            if m5_decision == "promote"
-            else "Collect more execution evidence or retune before any live trial."
-        ),
+        next_action="Candidate is execution-robust enough for the next promotion step." if m5_decision == "promote" else "Collect more execution evidence or retune before any live trial.",
         context={"base_cost_r": args.base_cost_r, "bootstrap_iters": args.bootstrap_iters},
     )
 
@@ -662,10 +652,10 @@ def main() -> None:
     )
     append_strategy_index(
         out_dir,
-        strategy_label="Elastic Band Reversion",
+        strategy_label="Jerk-Pivot Momentum (tight)",
         headline=(
             f"M2={m2_promoted.height}, "
-            f"M4={promoted_candidates_from_holdout(m4_summary).height if not m4_summary.is_empty() else 0}, "
+            f"M4={m4_promoted.height}, "
             f"M5={m5_execution.height}"
         ),
     )
@@ -673,7 +663,7 @@ def main() -> None:
         [out_dir],
         out_dir=out_dir,
         watchlist=args.tickers,
-        enabled_strategy_families=["elastic_band_reversion"],
+        enabled_strategy_families=["jerk_pivot_momentum"],
     )
 
 
