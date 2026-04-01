@@ -191,6 +191,30 @@ def test_queue_row_creation_and_chart_link_population(tmp_path: Path) -> None:
     assert row["latest_stage_reached"] == "M5"
 
 
+def test_queue_marks_m3_passed_when_later_stages_exist(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    run_dir = tmp_path / "family_run"
+    run_dir.mkdir()
+    _write_candidate_run(run_dir, include_m3=False, include_m4=True, include_m5=True)
+    config = NightlyRegimeMatrixConfig(
+        research_control_root=str(tmp_path / "control"),
+        watchlist=["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL"],
+    )
+
+    observations = manager.collect_observations(
+        run_dirs={"opening_drive_classifier": run_dir},
+        config=config,
+        run_date=date(2026, 4, 1),
+    )
+
+    assert len(observations) == 1
+    row = observations[0]
+    assert row["passes_m3"] is True
+    assert row["passes_m4"] is True
+    assert row["passes_m5"] is True
+    assert row["is_full_m1_m5_survivor"] is True
+
+
 def test_refresh_queue_writes_empty_review_surface_for_zero_survivor_night(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     run_dir = tmp_path / "family_run"

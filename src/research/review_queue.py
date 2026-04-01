@@ -271,7 +271,7 @@ class HumanReviewQueueManager:
             )
             m1_row = m1_lookup.get(candidate_key, {})
             m4_row = m4_lookup.get(candidate_key, {})
-            passes_m3 = candidate_key in m3_keys
+            passes_m3 = candidate_key in m3_keys or candidate_key in m4_lookup or candidate_key in m5_lookup
             passes_m4 = bool(_boolish(m4_row.get("passes_holdout")))
             passes_m5 = candidate_key in m5_lookup
             latest_stage_reached, latest_stage_decision = _latest_stage_state(
