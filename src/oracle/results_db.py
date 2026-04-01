@@ -109,6 +109,7 @@ class ResultsDB:
                     created_at TEXT NOT NULL,
                     strategy TEXT NOT NULL,
                     ticker TEXT,
+                    research_slice_id TEXT,
                     config_signature TEXT NOT NULL,
                     request_signature TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL,
@@ -127,6 +128,24 @@ class ResultsDB:
                     ON research_evaluations(config_signature);
                 CREATE INDEX IF NOT EXISTS idx_research_evaluations_ticker
                     ON research_evaluations(ticker);
+                """
+            )
+        self._ensure_research_evaluations_migrations()
+
+    def _ensure_research_evaluations_migrations(self) -> None:
+        with self._connect() as conn:
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_evaluations)").fetchall()
+            }
+            if "research_slice_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE research_evaluations ADD COLUMN research_slice_id TEXT"
+                )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_research_evaluations_slice
+                    ON research_evaluations(research_slice_id)
                 """
             )
 
@@ -259,6 +278,7 @@ class ResultsDB:
                     created_at,
                     strategy,
                     ticker,
+                    research_slice_id,
                     config_signature,
                     request_signature,
                     status,
@@ -269,12 +289,13 @@ class ResultsDB:
                     effective_cost_r,
                     runtime_seconds,
                     payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _utc_now(),
                     payload.get("strategy"),
                     ticker,
+                    payload.get("research_slice_id"),
                     payload.get("config_signature"),
                     payload.get("request_signature"),
                     payload.get("status"),
@@ -293,16 +314,20 @@ class ResultsDB:
         *,
         strategy: str,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
     ) -> list[dict[str, Any]]:
         query = """
             SELECT payload_json
             FROM research_evaluations
             WHERE strategy = ?
-            ORDER BY created_at DESC, id DESC
         """
-        params: tuple[Any, ...] = (strategy,)
+        params: list[Any] = [strategy]
+        if research_slice_id is not None:
+            query += " AND research_slice_id = ?"
+            params.append(research_slice_id)
+        query += " ORDER BY created_at DESC, id DESC"
         with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+            rows = conn.execute(query, tuple(params)).fetchall()
         payloads = [json.loads(row[0]) for row in rows]
         if ticker is None:
             return payloads

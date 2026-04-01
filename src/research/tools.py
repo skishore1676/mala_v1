@@ -258,12 +258,30 @@ def _normalized_slice_filter(
     return normalized
 
 
+def _normalized_slice_payload(slice_payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = _json_ready(slice_payload)
+    tickers = normalized.get("tickers")
+    if isinstance(tickers, list):
+        normalized["tickers"] = sorted(str(item) for item in tickers)
+    return normalized
+
+
+def _research_slice_id(
+    strategy_name: str,
+    slice_payload: dict[str, Any],
+) -> str:
+    return _stable_signature(
+        {
+            "strategy": strategy_name,
+            "slice": _normalized_slice_payload(slice_payload),
+        }
+    )
+
+
 def _slice_matches(payload_slice: dict[str, Any], slice_filter: dict[str, Any]) -> bool:
     if not slice_filter:
         return True
-    normalized_slice = _json_ready(payload_slice)
-    if "tickers" in normalized_slice and isinstance(normalized_slice["tickers"], list):
-        normalized_slice["tickers"] = sorted(str(item) for item in normalized_slice["tickers"])
+    normalized_slice = _normalized_slice_payload(payload_slice)
     for key, expected in slice_filter.items():
         actual = normalized_slice.get(key)
         if actual != expected:
@@ -396,6 +414,8 @@ class ResearchToolbox:
         self._storage = LocalStorage()
         self._physics = PhysicsEngine()
         self._results_db = ResultsDB(db_path=results_db_path)
+        self._active_research_slice_id: str | None = None
+        self._active_research_slice: dict[str, Any] | None = None
 
     def available_tools(self, stage: ResearchStage) -> list[str]:
         stage_tools = {
@@ -421,6 +441,16 @@ class ResearchToolbox:
             ResearchStage.M5_EXECUTION: ["execution_mapping"],
         }
         return stage_tools[stage]
+
+    def _set_active_slice(self, strategy_name: str, slice_payload: dict[str, Any]) -> str:
+        normalized_slice = _normalized_slice_payload(slice_payload)
+        research_slice_id = _research_slice_id(strategy_name, normalized_slice)
+        self._active_research_slice_id = research_slice_id
+        self._active_research_slice = {
+            "strategy": strategy_name,
+            "slice": normalized_slice,
+        }
+        return research_slice_id
 
     def invoke(self, tool_name: str, /, **kwargs: Any) -> ResearchToolResult:
         method = getattr(self, tool_name, None)
@@ -452,6 +482,23 @@ class ResearchToolbox:
         metrics: MetricsCalculator | None = None,
     ) -> ResearchToolResult:
         entry = self.registry.catalog_entry(strategy_name)
+        if self._has_execution_request(tickers, ticker_frames, start_date, end_date):
+            sweep_slice = _normalized_slice_payload(
+                {
+                    "tickers": sorted(tickers or sorted(ticker_frames or {})),
+                    "start_date": start_date.isoformat() if start_date is not None else None,
+                    "end_date": end_date.isoformat() if end_date is not None else None,
+                    "train_months": train_months,
+                    "test_months": test_months,
+                    "ratios": ratios or [1.0, 1.25, 1.5, 2.0],
+                    "min_signals": min_signals,
+                    "min_total_signals": min_total_signals,
+                    "cost_r": cost_r,
+                    "cost_bps": cost_bps,
+                    "evaluation_window": evaluation_window,
+                }
+            )
+            self._set_active_slice(strategy_name, sweep_slice)
         sweep_space = _entry_search_space(entry, parameter_space_override=parameter_space)
         configs, requested_config_count, invalid_config_count, normalized_duplicate_count = _canonical_sweep_configs(
             entry,
@@ -540,7 +587,7 @@ class ResearchToolbox:
         config_signature = _stable_signature(
             {"strategy": strategy_name, "config": normalized_config}
         )
-        slice_payload = {
+        slice_payload = _normalized_slice_payload({
             "tickers": sorted(tickers or sorted(ticker_frames or {})),
             "start_date": start_date.isoformat() if start_date is not None else None,
             "end_date": end_date.isoformat() if end_date is not None else None,
@@ -552,7 +599,8 @@ class ResearchToolbox:
             "cost_r": cost_r,
             "cost_bps": cost_bps,
             "evaluation_window": evaluation_window,
-        }
+        })
+        research_slice_id = self._set_active_slice(strategy_name, slice_payload)
         request_signature = _stable_signature(
             {"strategy": strategy_name, "config_signature": config_signature, "slice": slice_payload}
         )
@@ -581,6 +629,7 @@ class ResearchToolbox:
                 normalized_config=normalized_config,
                 config_signature=config_signature,
                 request_signature=request_signature,
+                research_slice_id=research_slice_id,
                 status=status,
                 inactive_parameters=inactive_parameters,
                 slice_payload=slice_payload,
@@ -632,10 +681,11 @@ class ResearchToolbox:
             strategy_name=strategy_name,
             normalized_config=normalized_config,
             config_signature=config_signature,
-            request_signature=request_signature,
-            status=status,
-            inactive_parameters=inactive_parameters,
-            slice_payload=slice_payload,
+                request_signature=request_signature,
+                research_slice_id=research_slice_id,
+                status=status,
+                inactive_parameters=inactive_parameters,
+                slice_payload=slice_payload,
             objective=objective,
             constraints=constraints,
             runtime_seconds=runtime_seconds,
@@ -653,6 +703,7 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
         slice_filter: dict[str, Any] | None = None,
         include_non_competitive: bool = False,
     ) -> ResearchToolResult:
@@ -660,9 +711,15 @@ class ResearchToolbox:
             ticker=ticker,
             slice_filter=slice_filter,
         )
+        effective_slice_id = self._resolve_query_slice_id(
+            strategy_name,
+            research_slice_id=research_slice_id,
+            slice_filter=normalized_slice_filter,
+        )
         rows = self._memory_rows(
             strategy_name,
             ticker=ticker,
+            research_slice_id=effective_slice_id,
             slice_filter=normalized_slice_filter,
             include_non_competitive=include_non_competitive,
         )
@@ -672,6 +729,7 @@ class ResearchToolbox:
                 summary={
                     "strategy": strategy_name,
                     "ticker": ticker,
+                    "research_slice_id": effective_slice_id,
                     "slice_filter": normalized_slice_filter,
                     "status": "empty",
                     "include_non_competitive": include_non_competitive,
@@ -685,6 +743,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok",
                 "evaluated_configs": len(rows),
+                "research_slice_id": effective_slice_id,
                 "slice_filter": normalized_slice_filter,
                 "include_non_competitive": include_non_competitive,
                 "incumbent": self._compact_memory_row(best),
@@ -696,6 +755,7 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
         slice_filter: dict[str, Any] | None = None,
         limit: int = 10,
         include_non_competitive: bool = False,
@@ -704,10 +764,16 @@ class ResearchToolbox:
             ticker=ticker,
             slice_filter=slice_filter,
         )
+        effective_slice_id = self._resolve_query_slice_id(
+            strategy_name,
+            research_slice_id=research_slice_id,
+            slice_filter=normalized_slice_filter,
+        )
         rows = self._sort_memory_rows(
             self._memory_rows(
                 strategy_name,
                 ticker=ticker,
+                research_slice_id=effective_slice_id,
                 slice_filter=normalized_slice_filter,
                 include_non_competitive=include_non_competitive,
             )
@@ -727,6 +793,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok" if pareto else "empty",
                 "front_size": len(pareto),
+                "research_slice_id": effective_slice_id,
                 "slice_filter": normalized_slice_filter,
                 "include_non_competitive": include_non_competitive,
                 "pareto_front": [self._compact_memory_row(row) for row in pareto[:limit]],
@@ -739,6 +806,7 @@ class ResearchToolbox:
         config: dict[str, Any],
         *,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
         slice_filter: dict[str, Any] | None = None,
         radius: int = 1,
         limit: int = 5,
@@ -748,6 +816,11 @@ class ResearchToolbox:
         normalized_slice_filter = _normalized_slice_filter(
             ticker=ticker,
             slice_filter=slice_filter,
+        )
+        effective_slice_id = self._resolve_query_slice_id(
+            strategy_name,
+            research_slice_id=research_slice_id,
+            slice_filter=normalized_slice_filter,
         )
         if errors:
             return ResearchToolResult(
@@ -761,6 +834,7 @@ class ResearchToolbox:
         rows = self._memory_rows(
             strategy_name,
             ticker=ticker,
+            research_slice_id=effective_slice_id,
             slice_filter=normalized_slice_filter,
         )
         nearby: list[dict[str, Any]] = []
@@ -787,6 +861,7 @@ class ResearchToolbox:
                 "status": "ok" if nearby else "empty",
                 "center_config": normalized_config,
                 "inactive_parameters": inactive_parameters,
+                "research_slice_id": effective_slice_id,
                 "slice_filter": normalized_slice_filter,
                 "radius": radius,
                 "neighbors": [self._compact_memory_row(row) for row in nearby[:limit]],
@@ -798,15 +873,22 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
         slice_filter: dict[str, Any] | None = None,
     ) -> ResearchToolResult:
         normalized_slice_filter = _normalized_slice_filter(
             ticker=ticker,
             slice_filter=slice_filter,
         )
+        effective_slice_id = self._resolve_query_slice_id(
+            strategy_name,
+            research_slice_id=research_slice_id,
+            slice_filter=normalized_slice_filter,
+        )
         rows = self._memory_rows(
             strategy_name,
             ticker=ticker,
+            research_slice_id=effective_slice_id,
             slice_filter=normalized_slice_filter,
             include_non_ok=True,
         )
@@ -860,6 +942,7 @@ class ResearchToolbox:
             summary={
                 "strategy": strategy_name,
                 "ticker": ticker,
+                "research_slice_id": effective_slice_id,
                 "slice_filter": normalized_slice_filter,
                 "status": "ok" if dead_zones else "empty",
                 "dead_zones": dead_zones[:5],
@@ -1331,6 +1414,7 @@ class ResearchToolbox:
         normalized_config: dict[str, Any],
         config_signature: str,
         request_signature: str,
+        research_slice_id: str,
         status: str,
         inactive_parameters: list[str],
         slice_payload: dict[str, Any],
@@ -1344,6 +1428,7 @@ class ResearchToolbox:
             "config": _json_ready(normalized_config),
             "config_signature": config_signature,
             "request_signature": request_signature,
+            "research_slice_id": research_slice_id,
             "status": status,
             "already_evaluated": False,
             "inactive_parameters": inactive_parameters,
@@ -1359,11 +1444,16 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        research_slice_id: str | None = None,
         slice_filter: dict[str, Any] | None = None,
         include_non_ok: bool = False,
         include_non_competitive: bool = True,
     ) -> list[dict[str, Any]]:
-        rows = self._results_db.list_research_evaluations(strategy=strategy_name, ticker=ticker)
+        rows = self._results_db.list_research_evaluations(
+            strategy=strategy_name,
+            ticker=ticker,
+            research_slice_id=research_slice_id,
+        )
         if slice_filter:
             rows = [
                 row for row in rows
@@ -1375,6 +1465,23 @@ class ResearchToolbox:
         if include_non_competitive:
             return filtered
         return [row for row in filtered if ResearchToolbox._is_competitive_memory_row(row)]
+
+    def _resolve_query_slice_id(
+        self,
+        strategy_name: str,
+        *,
+        research_slice_id: str | None,
+        slice_filter: dict[str, Any],
+    ) -> str | None:
+        if research_slice_id is not None:
+            return research_slice_id
+        if slice_filter:
+            return None
+        if self._active_research_slice is None or self._active_research_slice_id is None:
+            return None
+        if self._active_research_slice.get("strategy") != strategy_name:
+            return None
+        return self._active_research_slice_id
 
     @staticmethod
     def _is_competitive_memory_row(row: dict[str, Any]) -> bool:
@@ -1406,6 +1513,7 @@ class ResearchToolbox:
     @staticmethod
     def _compact_memory_row(row: dict[str, Any]) -> dict[str, Any]:
         compact = {
+            "research_slice_id": row.get("research_slice_id"),
             "config_signature": row.get("config_signature"),
             "status": row.get("status"),
             "config": row.get("config"),

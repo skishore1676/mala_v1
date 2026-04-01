@@ -46,6 +46,7 @@ class ResearchOrchestrator:
     def __init__(self, state_path: Path | None = None) -> None:
         self.registry = ResearchRegistry(state_path)
         self._state_path = state_path
+        self._toolbox: ResearchToolbox | None = None
 
     def validation_entries(self) -> list[StrategyCatalogEntry]:
         return self.registry.validation_entries()
@@ -68,7 +69,9 @@ class ResearchOrchestrator:
         ]
 
     def toolbox(self) -> ResearchToolbox:
-        return ResearchToolbox(self._state_path)
+        if self._toolbox is None:
+            self._toolbox = ResearchToolbox(self._state_path)
+        return self._toolbox
 
     def run_action(self, stage: ResearchStage, tool_name: str, /, **kwargs: Any) -> ResearchToolResult:
         allowed = {action.tool_name for action in self.next_actions(stage)}

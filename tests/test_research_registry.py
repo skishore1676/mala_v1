@@ -686,6 +686,7 @@ def test_toolbox_evaluate_config_runs_single_point_and_returns_optimizer_payload
 
     assert result.summary["status"] in {"ok", "insufficient_signals"}
     assert result.summary["already_evaluated"] is False
+    assert result.summary["research_slice_id"]
     assert result.summary["config_signature"]
     assert result.summary["objective"]["primary_metric"] == "avg_test_exp_r"
     assert "total_signals" in result.summary["constraints"]
@@ -724,6 +725,7 @@ def test_toolbox_evaluate_config_short_circuits_duplicates(tmp_path: Path) -> No
     assert first.summary["status"] in {"ok", "insufficient_signals"}
     assert second.summary["status"] == "duplicate"
     assert second.summary["already_evaluated"] is True
+    assert second.summary["research_slice_id"] == first.summary["research_slice_id"]
     assert second.summary["config_signature"] == first.summary["config_signature"]
 
 
@@ -869,6 +871,129 @@ def test_memory_queries_can_scope_to_the_active_research_slice(tmp_path: Path) -
     assert incumbent.summary["incumbent"]["config_signature"] == "slice-a"
     assert [row["config_signature"] for row in pareto.summary["pareto_front"]] == ["slice-a"]
     assert {row["config_signature"] for row in neighborhood.summary["neighbors"]} == {"slice-a"}
+
+
+def test_memory_queries_default_to_active_research_slice_id(tmp_path: Path) -> None:
+    toolbox = ResearchToolbox(results_db_path=tmp_path / "research_results.db")
+    first_slice = {
+        "tickers": ["META"],
+        "start_date": "2025-01-01",
+        "end_date": "2025-05-31",
+        "train_months": 2,
+        "test_months": 1,
+    }
+    second_slice = {
+        "tickers": ["META"],
+        "start_date": "2025-06-01",
+        "end_date": "2025-10-31",
+        "train_months": 2,
+        "test_months": 1,
+    }
+    first_slice_id = toolbox._set_active_slice("Elastic Band Reversion", first_slice)
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "research_slice_id": first_slice_id,
+            "config": {"z_score_threshold": 1.0},
+            "config_signature": "first-slice",
+            "request_signature": "first-slice:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.07, "confidence": 0.55},
+            "constraints": {"total_signals": 100, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": first_slice,
+            "errors": [],
+        }
+    )
+    second_slice_id = toolbox._set_active_slice("Elastic Band Reversion", second_slice)
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "research_slice_id": second_slice_id,
+            "config": {"z_score_threshold": 2.0},
+            "config_signature": "second-slice",
+            "request_signature": "second-slice:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.11, "confidence": 0.61},
+            "constraints": {"total_signals": 130, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": second_slice,
+            "errors": [],
+        }
+    )
+
+    incumbent = toolbox.query_incumbent("Elastic Band Reversion")
+    pareto = toolbox.query_pareto_front("Elastic Band Reversion")
+
+    assert incumbent.summary["research_slice_id"] == second_slice_id
+    assert incumbent.summary["incumbent"]["config_signature"] == "second-slice"
+    assert [row["config_signature"] for row in pareto.summary["pareto_front"]] == ["second-slice"]
+
+
+def test_memory_queries_can_override_active_slice_with_explicit_research_slice_id(tmp_path: Path) -> None:
+    toolbox = ResearchToolbox(results_db_path=tmp_path / "research_results.db")
+    first_slice = {
+        "tickers": ["META"],
+        "start_date": "2025-01-01",
+        "end_date": "2025-05-31",
+        "train_months": 2,
+        "test_months": 1,
+    }
+    second_slice = {
+        "tickers": ["META"],
+        "start_date": "2025-06-01",
+        "end_date": "2025-10-31",
+        "train_months": 2,
+        "test_months": 1,
+    }
+    first_slice_id = toolbox._set_active_slice("Elastic Band Reversion", first_slice)
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "research_slice_id": first_slice_id,
+            "config": {"z_score_threshold": 1.0},
+            "config_signature": "first-slice",
+            "request_signature": "first-slice:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.07, "confidence": 0.55},
+            "constraints": {"total_signals": 100, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": first_slice,
+            "errors": [],
+        }
+    )
+    second_slice_id = toolbox._set_active_slice("Elastic Band Reversion", second_slice)
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "research_slice_id": second_slice_id,
+            "config": {"z_score_threshold": 2.0},
+            "config_signature": "second-slice",
+            "request_signature": "second-slice:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.11, "confidence": 0.61},
+            "constraints": {"total_signals": 130, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": second_slice,
+            "errors": [],
+        }
+    )
+
+    incumbent = toolbox.query_incumbent(
+        "Elastic Band Reversion",
+        research_slice_id=first_slice_id,
+    )
+
+    assert incumbent.summary["research_slice_id"] == first_slice_id
+    assert incumbent.summary["incumbent"]["config_signature"] == "first-slice"
 
 
 def test_incumbent_and_pareto_exclude_insufficient_configs_by_default(tmp_path: Path) -> None:
