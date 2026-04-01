@@ -46,7 +46,7 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
             "NVDA,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,8.0,1.25,321,0.0612,42,0.5476,0.1649,true\n",
         ],
         m5_detail_header="ticker,strategy,direction,z_score_threshold,z_score_window,use_directional_mass,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
-        m5_detail_row="NVDA,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,1.25,42,0.5476,0.1521,42.0,-0.020538,-0.310285,-0.021474,0.25991,0.45275,-13.03198,-0.90191,10.916207,7.684631,call_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
+        m5_detail_row="NVDA,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,1.25,42,0.5476,0.1521,42.0,-0.020538,-0.310285,-0.021474,0.25991,0.45275,-13.03198,-0.90191,10.916207,7.684631,call_debit_spread,n/a,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
     )
 
     out_dir = tmp_path / "loop_artifacts"
@@ -93,6 +93,8 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     assert elastic_candidate["automation_status"] == "manual_research_only"
     assert elastic_candidate["bias_template"] == "bullish_mean_reversion_intraday"
     assert elastic_candidate["manifest"]["execution"]["profile"] == "manual_research_only"
+    assert "dte_min" not in elastic_candidate["manifest"]["execution"]
+    assert "dte_max" not in elastic_candidate["manifest"]["execution"]
     assert "Spread-aware execution stress and live monitoring" in elastic_candidate["manifest"]["source"]["metadata"]["required_bhiksha_capabilities"]
 
     market_context = playbook_payload["contexts"]["QQQ|bearish_trend_intraday|intraday"]

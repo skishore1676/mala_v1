@@ -370,13 +370,14 @@ def run_m4_m5(
         promoted=promoted_candidates,
         ticker_frames=frames,
         metrics=metrics,
-        calibration_start=start,
+        start_date=start,
         calibration_end=calibration_end,
         holdout_start=holdout_start,
         holdout_end=holdout_end,
         ratios=ratios,
-        cost_bps_grid=cost_grid_bps,
+        costs=cost_grid_bps,
         min_calibration_signals=min_calibration_signals,
+        min_holdout_signals=min_holdout_signals,
     )
     holdout_detail = pl.DataFrame(holdout_rows) if holdout_rows else pl.DataFrame()
     holdout_summary = summarize_holdout(holdout_detail, cost_count=len(cost_grid_bps)) if not holdout_detail.is_empty() else pl.DataFrame()

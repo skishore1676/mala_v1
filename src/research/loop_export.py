@@ -735,10 +735,18 @@ def _parse_range(value: Any) -> tuple[int | None, int | None]:
     raw = str(value).strip()
     if not raw:
         return None, None
+    if raw.lower() in {"n/a", "na", "none", "null"}:
+        return None, None
     if "-" in raw:
         start_raw, end_raw = (part.strip() for part in raw.split("-", 1))
-        return int(float(start_raw)), int(float(end_raw))
-    parsed = int(float(raw))
+        try:
+            return int(float(start_raw)), int(float(end_raw))
+        except (TypeError, ValueError):
+            return None, None
+    try:
+        parsed = int(float(raw))
+    except (TypeError, ValueError):
+        return None, None
     return parsed, parsed
 
 
