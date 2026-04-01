@@ -268,6 +268,9 @@ def test_build_candidate_strategy_ignores_rank_columns() -> None:
             "volume_multiplier": 1.2,
             "m1_score": 301.0,
             "avg_test_mfe_mae_ratio": 1.7,
+            "trades": 42,
+            "mc_exp_r_mean": 0.25,
+            "mc_max_dd_p50": 1.1,
         }
     )
 

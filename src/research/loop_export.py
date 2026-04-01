@@ -19,6 +19,7 @@ from src.research.loop_contracts import (
     PLAYBOOK_CATALOG_CONTRACT_NAME,
     build_contract_metadata,
 )
+from src.research.stages.candidates import candidate_params
 from src.strategy.factory import build_strategy, build_strategy_by_name
 
 
@@ -509,11 +510,7 @@ class LoopArtifactExporter:
         if strategy_name.startswith("Elastic Band "):
             strategy = build_strategy_by_name(strategy_name)
             return strategy.strategy_config()
-        params = {
-            key: value
-            for key, value in row.items()
-            if key not in _M5_METRIC_FIELDS and key not in {"ticker", "strategy", "direction"}
-        }
+        params = candidate_params(row)
         strategy = build_strategy(strategy_name, params)
         config = strategy.strategy_config()
         config.pop("strategy_label", None)
