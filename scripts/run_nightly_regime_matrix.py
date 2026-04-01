@@ -34,6 +34,8 @@ def main() -> None:
     print(f"BUNDLE_DIR={result.bundle_dir}")
     for family, run_dir in sorted(result.run_dirs.items()):
         print(f"RUN_DIR_{family.upper()}={run_dir}")
+    for family, log_path in sorted(result.family_log_paths.items()):
+        print(f"RUN_LOG_{family.upper()}={log_path}")
     print(f"DEPLOYMENT_CANDIDATES={result.deployment_candidates_path}")
     print(f"PLAYBOOK_CATALOG={result.playbook_catalog_path}")
     print(f"REVIEW_QUEUE={result.review_queue_path}")

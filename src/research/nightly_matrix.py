@@ -152,6 +152,7 @@ class NightlyRegimeMatrixConfig(BaseModel):
 class NightlyRegimeMatrixResult:
     bundle_dir: Path
     run_dirs: dict[str, Path]
+    family_log_paths: dict[str, Path]
     deployment_candidates_path: Path
     playbook_catalog_path: Path
     manifest_path: Path
@@ -162,7 +163,7 @@ class NightlyRegimeMatrixResult:
     charts_dir: Path
 
 
-FamilyRunner = Callable[[str, NightlyRegimeMatrixConfig, Path], Path]
+FamilyRunner = Callable[[str, NightlyRegimeMatrixConfig, Path], tuple[Path, Path]]
 
 
 def load_nightly_regime_matrix_config(
@@ -192,8 +193,11 @@ def run_nightly_regime_matrix(
     queue_manager = review_queue_manager or HumanReviewQueueManager(config.research_control_root)
 
     run_dirs: dict[str, Path] = {}
+    family_log_paths: dict[str, Path] = {}
     for family in config.enabled_strategy_families:
-        run_dirs[family] = runner(family, config, resolved_bundle_dir)
+        run_dir, log_path = runner(family, config, resolved_bundle_dir)
+        run_dirs[family] = run_dir
+        family_log_paths[family] = log_path
 
     candidates_path, playbook_path = loop_exporter.export_runs(
         list(run_dirs.values()),
@@ -215,6 +219,7 @@ def run_nightly_regime_matrix(
         "enabled_strategy_families": config.enabled_strategy_families,
         "bundle_dir": str(resolved_bundle_dir),
         "run_dirs": {family: str(path) for family, path in run_dirs.items()},
+        "family_logs": {family: str(path) for family, path in family_log_paths.items()},
         "review_control": {
             "queue_path": str(review_artifacts.queue_path),
             "history_path": str(review_artifacts.history_path),
@@ -240,6 +245,7 @@ def run_nightly_regime_matrix(
     return NightlyRegimeMatrixResult(
         bundle_dir=resolved_bundle_dir,
         run_dirs=run_dirs,
+        family_log_paths=family_log_paths,
         deployment_candidates_path=candidates_path,
         playbook_catalog_path=playbook_path,
         manifest_path=manifest_path,
@@ -255,11 +261,14 @@ def _run_family_research(
     family: str,
     config: NightlyRegimeMatrixConfig,
     bundle_dir: Path,
-) -> Path:
+) -> tuple[Path, Path]:
     script_relative = _FAMILY_TO_SCRIPT[family]
     script_path = (PROJECT_ROOT / script_relative).resolve()
     family_root = bundle_dir / "family_runs"
     family_root.mkdir(parents=True, exist_ok=True)
+    logs_root = bundle_dir / "logs"
+    logs_root.mkdir(parents=True, exist_ok=True)
+    log_path = logs_root / f"{family}.log"
     command = [
         sys.executable,
         str(script_path),
@@ -269,25 +278,37 @@ def _run_family_research(
         "--out-dir",
         str(family_root),
     ]
-    completed = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with log_path.open("w", encoding="utf-8") as handle:
+        completed = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+    output_text = log_path.read_text(encoding="utf-8")
     if completed.returncode != 0:
         raise RuntimeError(
             f"Nightly family runner failed for {family}\n"
-            f"STDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+            f"See log: {log_path}\n"
+            f"Log tail:\n{_tail_text(output_text)}"
         )
-    match = _OUT_DIR_RE.search(completed.stdout)
+    match = _OUT_DIR_RE.search(output_text)
     if match is None:
         raise RuntimeError(
             f"Could not locate OUT_DIR in {family} runner output.\n"
-            f"STDOUT:\n{completed.stdout}"
+            f"See log: {log_path}\n"
+            f"Log tail:\n{_tail_text(output_text)}"
         )
-    return Path(match.group("path")).resolve()
+    return Path(match.group("path")).resolve(), log_path.resolve()
+
+
+def _tail_text(text: str, *, line_count: int = 40) -> str:
+    lines = text.strip().splitlines()
+    if not lines:
+        return "<empty log>"
+    return "\n".join(lines[-line_count:])
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

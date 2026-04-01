@@ -6,6 +6,7 @@ from pathlib import Path
 from src.research.loop_contracts import LOOP_ARTIFACT_SCHEMA_VERSION
 from src.research.nightly_matrix import (
     NightlyRegimeMatrixConfig,
+    _run_family_research,
     load_nightly_regime_matrix_config,
     run_nightly_regime_matrix,
 )
@@ -34,9 +35,16 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     config.research_control_root = str(tmp_path / "control")
     assert config.watchlist == ["IWM", "TSLA"]
 
-    def fake_family_runner(family: str, loaded_config: NightlyRegimeMatrixConfig, bundle_dir: Path) -> Path:
+    def fake_family_runner(
+        family: str,
+        loaded_config: NightlyRegimeMatrixConfig,
+        bundle_dir: Path,
+    ) -> tuple[Path, Path]:
         run_dir = bundle_dir / family
         run_dir.mkdir(parents=True, exist_ok=True)
+        log_path = bundle_dir / "logs" / f"{family}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"OUT_DIR={run_dir}\n", encoding="utf-8")
         if family == "market_impulse":
             _write_run(
                 run_dir,
@@ -85,7 +93,7 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
                 m5_detail_header="ticker,strategy,direction,z_score_threshold,z_score_window,use_directional_mass,selected_ratio,holdout_trades,holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,delta_plan,entry_window_et,profit_take,risk_rule\n",
                 m5_detail_row="IWM,Elastic Band z=3.0/w=120+dm,long,3.0,120,true,1.25,42,0.5476,0.1521,42.0,-0.020538,-0.310285,-0.021474,0.25991,0.45275,-13.03198,-0.90191,10.916207,7.684631,call_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n",
             )
-        return run_dir
+        return run_dir, log_path
 
     result = run_nightly_regime_matrix(
         config,
@@ -106,12 +114,85 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     ]
     assert manifest["config_watchlist"] == ["IWM", "TSLA"]
     assert manifest["contracts"]["deployment_candidates"]["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert manifest["family_logs"]["market_impulse"].endswith("logs/market_impulse.log")
     assert result.review_queue_path.exists()
     assert result.review_history_path.exists()
     assert result.review_workbook_path.exists()
     assert playbook_catalog["contexts"]["TSLA|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_with_survivors"
     assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["proposed_candidates"]
     assert playbook_catalog["contexts"]["TSLA|bearish_mean_reversion_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
+
+
+def test_run_family_research_streams_output_to_log(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    scripts_dir = project_root / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_dir / "fake_family.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from pathlib import Path",
+                "print('line-1')",
+                "print('line-2')",
+                "out_dir = Path('family_output').resolve()",
+                "out_dir.mkdir(parents=True, exist_ok=True)",
+                "print(f'OUT_DIR={out_dir}')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import src.research.nightly_matrix as nightly_matrix
+
+    monkeypatch.setattr(nightly_matrix, "PROJECT_ROOT", project_root)
+    monkeypatch.setitem(nightly_matrix._FAMILY_TO_SCRIPT, "market_impulse", "scripts/fake_family.py")
+
+    config = NightlyRegimeMatrixConfig(enabled_strategy_families=["market_impulse"])
+    run_dir, log_path = _run_family_research("market_impulse", config, tmp_path / "bundle")
+
+    assert run_dir == (project_root / "family_output").resolve()
+    assert log_path == (tmp_path / "bundle" / "logs" / "market_impulse.log").resolve()
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "line-1" in log_text
+    assert f"OUT_DIR={run_dir}" in log_text
+
+
+def test_run_family_research_failure_references_log(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    scripts_dir = project_root / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_dir / "fake_family_fail.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "print('bad-line')",
+                "raise SystemExit(3)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import src.research.nightly_matrix as nightly_matrix
+
+    monkeypatch.setattr(nightly_matrix, "PROJECT_ROOT", project_root)
+    monkeypatch.setitem(nightly_matrix._FAMILY_TO_SCRIPT, "market_impulse", "scripts/fake_family_fail.py")
+
+    config = NightlyRegimeMatrixConfig(enabled_strategy_families=["market_impulse"])
+
+    try:
+        _run_family_research("market_impulse", config, tmp_path / "bundle")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected _run_family_research to fail")
+
+    assert "See log:" in message
+    assert "bad-line" in message
+    assert "STDOUT:" not in message
 
 
 def test_nightly_regime_matrix_default_watchlist_includes_tier1_single_names() -> None:
