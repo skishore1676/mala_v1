@@ -9,6 +9,12 @@ It now does two jobs in one pass:
 
 The broad scout now stops at `M2` by default. Deep `M3/M4/M5` work is reserved for queue-approved follow-up actions.
 
+This is the intended architecture:
+
+- nightly scout finds and organizes candidates
+- the human review queue decides what deserves expensive validation
+- only validated follow-up runs produce deployable playbooks
+
 ## Current Scope
 
 - Watchlist source: `config/nightly_regime_matrix.yaml`
@@ -75,6 +81,16 @@ Important files:
 - `nightly_matrix_manifest.json`
 
 Because the broad scout stops at `M2`, the top-level deployment/export JSONs may be empty on nights where no queued follow-up run emits fresh `M5`-level execution artifacts. That is expected; the queue/workbook/charts surface is the primary operating output for the scout.
+
+The nightly summary should be read literally. On a normal scout-only night it may say:
+
+```text
+scout_only_run = true
+deployment_candidates_generated = 0
+reason = no M3-M5 follow-up executed
+```
+
+That means the pipeline is healthy, the scout stopped where it was supposed to stop, and deployable playbooks were not expected from that pass.
 
 The nightly loop also writes a stable research-control area under:
 

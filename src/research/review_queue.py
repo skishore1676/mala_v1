@@ -119,6 +119,7 @@ class ReviewQueueArtifacts:
     workbook_path: Path
     review_bundle_dir: Path
     charts_dir: Path
+    followup_actions_run_count: int
 
 
 def resolve_review_queue_paths(control_dir: str | Path) -> ReviewQueuePaths:
@@ -184,7 +185,7 @@ class HumanReviewQueueManager:
             max_new_rows=getattr(config.followup_budgets, "max_new_m2_rows_per_night", 10),
         )
         self._append_history(observations, run_date=run_date)
-        executed_rows = self._execute_followups(
+        executed_rows, followup_actions_run_count = self._execute_followups(
             rows=merged_rows,
             config=config,
             run_date=run_date,
@@ -198,6 +199,7 @@ class HumanReviewQueueManager:
             workbook_path=self.paths.workbook_path,
             review_bundle_dir=self.paths.review_bundle_dir,
             charts_dir=self.paths.charts_dir,
+            followup_actions_run_count=followup_actions_run_count,
         )
 
     def collect_observations(
@@ -406,7 +408,7 @@ class HumanReviewQueueManager:
         rows: list[dict[str, Any]],
         config: Any,
         run_date: date,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         eligible = self._eligible_rows(rows=rows, run_date=run_date)
         budgets = config.followup_budgets
         totals = {
@@ -452,7 +454,7 @@ class HumanReviewQueueManager:
             totals["all"] += 1
             if decision in totals:
                 totals[decision] += 1
-        return self._sort_rows(list(by_key.values()))
+        return self._sort_rows(list(by_key.values())), totals["all"]
 
     def _run_followup(
         self,

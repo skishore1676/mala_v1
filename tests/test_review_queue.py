@@ -452,9 +452,14 @@ def test_queue_consumption_honors_budget_caps(tmp_path: Path) -> None:
         },
     ]
 
-    updated = manager._execute_followups(rows=rows, config=config, run_date=date(2026, 4, 1))
+    updated, followup_actions_run_count = manager._execute_followups(
+        rows=rows,
+        config=config,
+        run_date=date(2026, 4, 1),
+    )
 
     assert calls == [("c1", "promote_to_m3"), ("c2", "retune")]
+    assert followup_actions_run_count == 2
     status_by_key = {row["candidate_key"]: row["queue_status"] for row in updated}
     assert status_by_key["c1"] == QUEUE_STATUS_EXECUTED
     assert status_by_key["c2"] == QUEUE_STATUS_EXECUTED
@@ -477,7 +482,7 @@ def test_promote_to_m3_marks_row_executed_via_followup_execution(tmp_path: Path)
         },
     )
     config = NightlyRegimeMatrixConfig(research_control_root=str(tmp_path / "control"))
-    updated = manager._execute_followups(
+    updated, followup_actions_run_count = manager._execute_followups(
         rows=[
             {
                 "candidate_key": "promo",
@@ -497,6 +502,7 @@ def test_promote_to_m3_marks_row_executed_via_followup_execution(tmp_path: Path)
         run_date=date(2026, 4, 1),
     )
 
+    assert followup_actions_run_count == 1
     assert updated[0]["queue_status"] == QUEUE_STATUS_EXECUTED
     assert updated[0]["latest_stage_reached"] == "M4"
 

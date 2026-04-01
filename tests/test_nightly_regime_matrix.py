@@ -116,6 +116,13 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     assert manifest["config_watchlist"] == ["IWM", "TSLA"]
     assert manifest["contracts"]["deployment_candidates"]["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
     assert manifest["family_logs"]["market_impulse"].endswith("logs/market_impulse.log")
+    assert manifest["nightly_summary"]["scout_only_run"] is True
+    assert manifest["nightly_summary"]["deployment_candidates_generated"] == 3
+    assert manifest["nightly_summary"]["followup_actions_run_count"] == 0
+    assert result.scout_only_run is True
+    assert result.deployment_candidates_generated == 3
+    assert result.followup_actions_run_count == 0
+    assert result.summary_reason == "validated follow-up artifacts produced deployable playbooks"
     assert result.review_queue_path.exists()
     assert result.review_history_path.exists()
     assert result.review_workbook_path.exists()
@@ -232,9 +239,20 @@ def test_run_nightly_regime_matrix_merges_m2_only_scout_into_queue(tmp_path: Pat
     )
 
     deployment_candidates = json.loads(result.deployment_candidates_path.read_text(encoding="utf-8"))
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     queue_rows = _read_csv_rows(result.review_queue_path)
 
     assert deployment_candidates["candidates"] == []
+    assert manifest["nightly_summary"] == {
+        "scout_only_run": True,
+        "deployment_candidates_generated": 0,
+        "followup_actions_run_count": 0,
+        "reason": "no M3-M5 follow-up executed",
+    }
+    assert result.scout_only_run is True
+    assert result.deployment_candidates_generated == 0
+    assert result.followup_actions_run_count == 0
+    assert result.summary_reason == "no M3-M5 follow-up executed"
     assert len(queue_rows) == 1
     assert queue_rows[0]["ticker"] == "SPY"
     assert queue_rows[0]["queue_status"] == "NEW"

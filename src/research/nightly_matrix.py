@@ -172,6 +172,10 @@ class NightlyRegimeMatrixResult:
     review_workbook_path: Path
     review_bundle_dir: Path
     charts_dir: Path
+    scout_only_run: bool
+    deployment_candidates_generated: int
+    followup_actions_run_count: int
+    summary_reason: str
 
 
 FamilyRunner = Callable[[str, NightlyRegimeMatrixConfig, Path], tuple[Path, Path]]
@@ -221,6 +225,15 @@ def run_nightly_regime_matrix(
         config=config,
         run_date=resolved_run_date,
     )
+    candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+    scout_only_run = config.defaults.broad_scout_max_stage == "M2"
+    deployment_candidates_generated = len(candidates_payload.get("candidates", []))
+    followup_actions_run_count = review_artifacts.followup_actions_run_count
+    summary_reason = _nightly_summary_reason(
+        scout_only_run=scout_only_run,
+        deployment_candidates_generated=deployment_candidates_generated,
+        followup_actions_run_count=followup_actions_run_count,
+    )
 
     manifest_path = resolved_bundle_dir / "nightly_matrix_manifest.json"
     manifest_payload = {
@@ -237,6 +250,12 @@ def run_nightly_regime_matrix(
             "workbook_path": str(review_artifacts.workbook_path),
             "review_bundle_dir": str(review_artifacts.review_bundle_dir),
             "charts_dir": str(review_artifacts.charts_dir),
+        },
+        "nightly_summary": {
+            "scout_only_run": scout_only_run,
+            "deployment_candidates_generated": deployment_candidates_generated,
+            "followup_actions_run_count": followup_actions_run_count,
+            "reason": summary_reason,
         },
         "contracts": {
             DEPLOYMENT_CANDIDATES_CONTRACT_NAME: {
@@ -265,6 +284,10 @@ def run_nightly_regime_matrix(
         review_workbook_path=review_artifacts.workbook_path,
         review_bundle_dir=review_artifacts.review_bundle_dir,
         charts_dir=review_artifacts.charts_dir,
+        scout_only_run=scout_only_run,
+        deployment_candidates_generated=deployment_candidates_generated,
+        followup_actions_run_count=followup_actions_run_count,
+        summary_reason=summary_reason,
     )
 
 
@@ -320,6 +343,21 @@ def _tail_text(text: str, *, line_count: int = 40) -> str:
     if not lines:
         return "<empty log>"
     return "\n".join(lines[-line_count:])
+
+
+def _nightly_summary_reason(
+    *,
+    scout_only_run: bool,
+    deployment_candidates_generated: int,
+    followup_actions_run_count: int,
+) -> str:
+    if scout_only_run and deployment_candidates_generated == 0 and followup_actions_run_count == 0:
+        return "no M3-M5 follow-up executed"
+    if scout_only_run and deployment_candidates_generated == 0:
+        return "broad scout stopped at M2; validated follow-up exports were not generated into the top-level deployment bundle"
+    if deployment_candidates_generated > 0:
+        return "validated follow-up artifacts produced deployable playbooks"
+    return "no deployable candidates were exported"
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

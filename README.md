@@ -313,11 +313,34 @@ The canonical operator-facing nightly workflow is now `scripts/run_nightly_regim
 
 That nightly loop:
 
-- scouts the default Tier 1 watchlist across the core research families,
+- scouts the default Tier 1 watchlist across the core research families at `M1/M2` only,
 - merges nightly M2 survivors into a durable human review queue,
 - refreshes local Plotly chart artifacts for each queued survivor,
 - executes approved follow-up actions under explicit nightly budget caps, and
 - writes a review workbook/CSV bundle for the next morning's inspection pass.
+
+The intended architecture is explicit:
+
+- nightly scout finds and organizes candidates
+- human review queue decides what deserves expensive validation
+- only validated `M3/M4/M5` follow-ups produce deployable playbooks
+
+That means an empty top-level `deployment_candidates.json` on a scout-only night is expected behavior, not a broken pipeline.
+
+The nightly CLI now prints an explicit summary block such as:
+
+```text
+scout_only_run = true
+deployment_candidates_generated = 0
+reason = no M3-M5 follow-up executed
+```
+
+Read that as:
+
+- the scout ran correctly
+- candidates may still have been queued for review
+- no validated follow-up produced deployable playbooks yet
+- the queue/workbook/charts are the primary operating outputs for that run
 
 Even when a night produces zero M2 survivors, the operator contract is still to publish an initialized queue/history/workbook surface rather than failing or leaving no review artifacts behind.
 
