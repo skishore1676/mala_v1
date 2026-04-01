@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 
 from src.oracle.metrics import MetricsCalculator
-from src.oracle.policies import RewardRiskWinCondition
 from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
-from src.research.stages.walk_forward import cost_r_from_bps
+from src.research.stages.directional import (
+    canonical_directional_snapshot_windows,
+    resolve_evaluation_window,
+)
+from src.research.stages.walk_forward import evaluate_df
 from src.time_utils import et_date_expr
 
 
@@ -32,27 +34,20 @@ def latest_csv(out_dir: Path, prefix: str, exclude_substrings: tuple[str, ...] =
     return filtered[-1]
 
 
-def eval_direction(df_eval: pl.DataFrame, direction: str, ratio: float, cost_bps: float) -> dict[str, float | int | None]:
-    base = df_eval.filter(pl.col("signal")).drop_nulls(
-        subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"]
+def eval_direction(
+    df_eval: pl.DataFrame,
+    direction: str,
+    ratio: float,
+    cost_bps: float,
+    evaluation_window: int | None = None,
+) -> dict[str, float | int | None]:
+    return evaluate_df(
+        df_eval,
+        direction,
+        ratio,
+        cost_bps=cost_bps,
+        evaluation_window=evaluation_window,
     )
-    if direction != "combined":
-        base = base.filter(pl.col("signal_direction") == direction)
-
-    if base.is_empty():
-        return {"signals": 0, "confidence": None, "exp_r": None}
-
-    mfe = base["forward_mfe_eod"].to_numpy()
-    mae = base["forward_mae_eod"].to_numpy()
-    policy = RewardRiskWinCondition(ratio=ratio)
-    p = policy.confidence(mfe, mae)
-
-    avg_price = float(base["close"].mean())
-    avg_mae_dollars = float(np.mean(mae))
-    cost_r = cost_r_from_bps(cost_bps, avg_mae_dollars, avg_price)
-
-    exp_r = policy.expectancy(mfe, mae, cost_r)
-    return {"signals": int(len(mfe)), "confidence": round(p, 4), "exp_r": round(exp_r, 4)}
 
 
 def choose_ratio(
@@ -62,12 +57,19 @@ def choose_ratio(
     ratios: list[float],
     cost_bps: float,
     min_calib_signals: int,
+    evaluation_window: int | None = None,
 ) -> tuple[float | None, dict[str, float | int | None]]:
     best_ratio = None
     best_exp = -1e9
     best_stats: dict[str, float | int | None] = {"signals": 0, "confidence": None, "exp_r": None}
     for ratio in ratios:
-        stats = eval_direction(calib_df, direction, ratio, cost_bps)
+        stats = eval_direction(
+            calib_df,
+            direction,
+            ratio,
+            cost_bps,
+            evaluation_window=evaluation_window,
+        )
         if stats["exp_r"] is None or int(stats["signals"]) < min_calib_signals:
             continue
         exp_r = float(stats["exp_r"])
@@ -97,8 +99,14 @@ def run_holdout_validation_for_candidates(
     costs: list[float],
     min_calibration_signals: int,
     min_holdout_signals: int,
+    evaluation_window: int | None = None,
 ) -> list[dict[str, object]]:
     detail_rows: list[dict[str, object]] = []
+    resolved_window = resolve_evaluation_window(metrics, evaluation_window)
+    snapshot_windows = canonical_directional_snapshot_windows(
+        metrics=metrics,
+        evaluation_window=resolved_window,
+    )
 
     for candidate in promoted.iter_rows(named=True):
         ticker = candidate["ticker"]
@@ -112,7 +120,10 @@ def run_holdout_validation_for_candidates(
 
         strategy = build_candidate_strategy(candidate)
         df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
-        df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
+        df_eval = metrics.add_directional_forward_metrics(
+            df_sig,
+            snapshot_windows=snapshot_windows,
+        )
 
         calib_df = df_eval.filter(
             (et_date_expr("timestamp") >= start_date)
@@ -130,6 +141,7 @@ def run_holdout_validation_for_candidates(
                 ratios=ratios,
                 cost_bps=cost_bps,
                 min_calib_signals=min_calibration_signals,
+                evaluation_window=resolved_window,
             )
             if selected_ratio is None:
                 detail_rows.append(
@@ -139,6 +151,7 @@ def run_holdout_validation_for_candidates(
                         "direction": direction,
                         **candidate_context,
                         "cost_bps": cost_bps,
+                        "evaluation_window": resolved_window,
                         "selected_ratio": None,
                         "calib_signals": 0,
                         "calib_exp_r": None,
@@ -150,7 +163,13 @@ def run_holdout_validation_for_candidates(
                 )
                 continue
 
-            holdout_stats = eval_direction(holdout_df, direction, selected_ratio, cost_bps)
+            holdout_stats = eval_direction(
+                holdout_df,
+                direction,
+                selected_ratio,
+                cost_bps,
+                evaluation_window=resolved_window,
+            )
             holdout_signals = int(holdout_stats["signals"])
             holdout_exp = holdout_stats["exp_r"]
             passes_cost = (
@@ -165,6 +184,7 @@ def run_holdout_validation_for_candidates(
                     "direction": direction,
                     **candidate_context,
                     "cost_bps": cost_bps,
+                    "evaluation_window": resolved_window,
                     "selected_ratio": selected_ratio,
                     "calib_signals": int(calib_stats["signals"]),
                     "calib_exp_r": calib_stats["exp_r"],

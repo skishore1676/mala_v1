@@ -11,6 +11,11 @@ from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig, stress_from_win_flags, stress_profile_library
 from src.oracle.policies import RewardRiskWinCondition
 from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
+from src.research.stages.directional import (
+    canonical_directional_snapshot_windows,
+    resolve_directional_metric_columns,
+    resolve_evaluation_window,
+)
 from src.time_utils import et_date_expr
 
 
@@ -138,11 +143,17 @@ def run_execution_mapping_for_candidates(
     holdout_end,
     base_cost_r: float,
     stress_cfg: ExecutionStressConfig,
+    evaluation_window: int | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     stress_profiles = stress_profile_library(
         bootstrap_iters=stress_cfg.bootstrap_iters,
         random_seed=stress_cfg.random_seed,
+    )
+    resolved_window = resolve_evaluation_window(metrics, evaluation_window)
+    snapshot_windows = canonical_directional_snapshot_windows(
+        metrics=metrics,
+        evaluation_window=resolved_window,
     )
 
     for candidate in promoted.iter_rows(named=True):
@@ -164,22 +175,31 @@ def run_execution_mapping_for_candidates(
 
         strategy = build_candidate_strategy(candidate)
         df_sig = strategy.generate_signals(ticker_frames[ticker].clone())
-        df_eval = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
+        df_eval = metrics.add_directional_forward_metrics(
+            df_sig,
+            snapshot_windows=snapshot_windows,
+        )
+        mfe_col, mae_col, metric_window = resolve_directional_metric_columns(
+            df_eval,
+            evaluation_window=resolved_window,
+            metrics=metrics,
+            allow_eod_fallback=False,
+        )
 
         base = df_eval.filter(
             (et_date_expr("timestamp") >= holdout_start)
             & (et_date_expr("timestamp") <= holdout_end)
             & pl.col("signal")
-            & pl.col("forward_mfe_eod").is_not_null()
-            & pl.col("forward_mae_eod").is_not_null()
+            & pl.col(mfe_col).is_not_null()
+            & pl.col(mae_col).is_not_null()
         )
         if direction != "combined":
             base = base.filter(pl.col("signal_direction") == direction)
         if base.is_empty():
             continue
 
-        mfe = base["forward_mfe_eod"].to_numpy()
-        mae = base["forward_mae_eod"].to_numpy()
+        mfe = base[mfe_col].to_numpy()
+        mae = base[mae_col].to_numpy()
         policy = RewardRiskWinCondition(ratio=selected_ratio)
         wins = policy.flags(mfe, mae)
         p = policy.confidence(mfe, mae)
@@ -203,6 +223,7 @@ def run_execution_mapping_for_candidates(
                     "execution_profile": profile["execution_profile"],
                     "stress_profile": stress_name,
                     "selected_ratio": selected_ratio,
+                    "evaluation_window": metric_window,
                     "holdout_trades": int(len(wins)),
                     "holdout_win_rate": round(p, 4),
                     "base_exp_r": round(base_exp_r, 4),

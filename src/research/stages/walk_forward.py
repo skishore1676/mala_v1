@@ -12,6 +12,11 @@ from dateutil.relativedelta import relativedelta
 
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.policies import RewardRiskWinCondition
+from src.research.stages.directional import (
+    canonical_directional_snapshot_windows,
+    resolve_directional_metric_columns,
+    resolve_evaluation_window,
+)
 from src.time_utils import et_date_expr
 
 
@@ -58,18 +63,30 @@ def evaluate_df(
     ratio: float,
     cost_r: float | None = None,
     cost_bps: float | None = None,
+    evaluation_window: int | None = None,
 ) -> dict[str, float | int | None]:
+    mfe_col, mae_col, resolved_window = resolve_directional_metric_columns(
+        df_eval,
+        evaluation_window=evaluation_window,
+        allow_eod_fallback=evaluation_window is None,
+    )
     base = df_eval.filter(pl.col("signal")).drop_nulls(
-        subset=["forward_mfe_eod", "forward_mae_eod", "signal_direction"]
+        subset=[mfe_col, mae_col, "signal_direction"]
     )
     if direction != "combined":
         base = base.filter(pl.col("signal_direction") == direction)
 
     if base.is_empty():
-        return {"signals": 0, "confidence": None, "exp_r": None, "effective_cost_r": None}
+        return {
+            "signals": 0,
+            "confidence": None,
+            "exp_r": None,
+            "effective_cost_r": None,
+            "evaluation_window": resolved_window,
+        }
 
-    mfe = base["forward_mfe_eod"].to_numpy()
-    mae = base["forward_mae_eod"].to_numpy()
+    mfe = base[mfe_col].to_numpy()
+    mae = base[mae_col].to_numpy()
 
     if cost_bps is not None:
         avg_mae_d = float(np.mean(mae))
@@ -84,6 +101,7 @@ def evaluate_df(
         "confidence": round(p, 4),
         "exp_r": round(exp_r, 4),
         "effective_cost_r": round(effective_cost_r, 5),
+        "evaluation_window": resolved_window,
     }
 
 
@@ -98,12 +116,21 @@ def run_walk_forward_for_strategies(
     min_signals: int,
     cost_r: float | None = None,
     cost_bps: float | None = None,
+    evaluation_window: int | None = None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    resolved_window = resolve_evaluation_window(metrics, evaluation_window)
+    snapshot_windows = canonical_directional_snapshot_windows(
+        metrics=metrics,
+        evaluation_window=resolved_window,
+    )
 
     for strategy in strategies:
         df_sig = strategy.generate_signals(df.clone())
-        df_eval_all = metrics.add_directional_forward_metrics(df_sig, snapshot_windows=(30, 60))
+        df_eval_all = metrics.add_directional_forward_metrics(
+            df_sig,
+            snapshot_windows=snapshot_windows,
+        )
 
         for w_idx, window in enumerate(windows, start=1):
             train_df = df_eval_all.filter(
@@ -128,6 +155,7 @@ def run_walk_forward_for_strategies(
                         ratio,
                         cost_r=cost_r,
                         cost_bps=cost_bps,
+                        evaluation_window=resolved_window,
                     )
                     n = int(train_stats["signals"])
                     if n < min_signals or train_stats["exp_r"] is None:
@@ -148,6 +176,7 @@ def run_walk_forward_for_strategies(
                     best_ratio,
                     cost_r=cost_r,
                     cost_bps=cost_bps,
+                    evaluation_window=resolved_window,
                 )
                 test_n = int(test_stats["signals"])
                 if test_n < min_signals or test_stats["exp_r"] is None:
@@ -164,6 +193,7 @@ def run_walk_forward_for_strategies(
                         "test_start": window.test_start.isoformat(),
                         "test_end": window.test_end.isoformat(),
                         "selected_ratio": best_ratio,
+                        "evaluation_window": resolved_window,
                         "train_signals": best_train_n,
                         "train_confidence": best_train_conf,
                         "train_exp_r": round(best_train_exp, 4),

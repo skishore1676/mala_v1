@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 
 import polars as pl
 
+import src.research.stages.execution as execution_stage
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
 from src.oracle.policies import RewardRiskWinCondition
@@ -63,6 +64,42 @@ def _sample_eval_df() -> pl.DataFrame:
     )
 
 
+def _directional_summary_df() -> pl.DataFrame:
+    ts = [datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i) for i in range(50)]
+    close = [100.0 + (i * 0.05) for i in range(50)]
+    return pl.DataFrame(
+        {
+            "timestamp": ts,
+            "close": close,
+            "high": [price + 0.2 for price in close],
+            "low": [price - 0.2 for price in close],
+            "signal": [idx in {5, 20} for idx in range(50)],
+            "signal_direction": [
+                "long" if idx == 5 else "short" if idx == 20 else None
+                for idx in range(50)
+            ],
+        }
+    )
+
+
+def _fixed_horizon_eval_df() -> pl.DataFrame:
+    ts = [datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i) for i in range(4)]
+    return pl.DataFrame(
+        {
+            "timestamp": ts,
+            "close": [100.0, 100.0, 100.0, 100.0],
+            "high": [100.0, 100.0, 100.0, 100.0],
+            "low": [100.0, 100.0, 100.0, 100.0],
+            "signal": [True, False, True, False],
+            "signal_direction": ["long", None, "long", None],
+            "forward_mfe_15": [1.5, None, 1.5, None],
+            "forward_mae_15": [1.0, None, 1.0, None],
+            "forward_mfe_eod": [3.0, None, 3.0, None],
+            "forward_mae_eod": [1.0, None, 1.0, None],
+        }
+    )
+
+
 def test_build_windows_creates_expected_rolls() -> None:
     windows = build_windows(date(2025, 1, 1), date(2025, 12, 31), 6, 3)
     assert len(windows) == 2
@@ -93,6 +130,23 @@ def test_metrics_calculator_supports_custom_win_policy() -> None:
 
     summary = metrics.summarise_directional_signals(enriched)
     assert "confidence_1p5to1" in summary.columns
+
+
+def test_directional_summary_discovers_snapshot_windows() -> None:
+    metrics = MetricsCalculator()
+    enriched = metrics.add_directional_forward_metrics(
+        _directional_summary_df(),
+        snapshot_windows=(15, 45),
+    )
+
+    summary = metrics.summarise_directional_signals(enriched)
+
+    assert "avg_mfe_15m" in summary.columns
+    assert "avg_mae_15m" in summary.columns
+    assert "avg_mfe_45m" in summary.columns
+    assert "avg_mae_45m" in summary.columns
+    assert "avg_mfe_30m" not in summary.columns
+    assert "avg_mfe_60m" not in summary.columns
 
 
 def test_aggregate_walk_forward() -> None:
@@ -312,6 +366,19 @@ def test_holdout_stage_logic() -> None:
     assert row["decision"] == "promote_to_execution_mapping"
 
 
+def test_choose_ratio_prefers_fixed_horizon_metrics_by_default() -> None:
+    chosen_ratio, stats = choose_ratio(
+        calib_df=_fixed_horizon_eval_df(),
+        direction="combined",
+        ratios=[1.0, 2.0],
+        cost_bps=0.0,
+        min_calib_signals=1,
+    )
+
+    assert chosen_ratio == 1.0
+    assert stats["evaluation_window"] == 15
+
+
 def test_holdout_summary_preserves_candidate_config_columns() -> None:
     detail_df = pl.DataFrame(
         [
@@ -503,3 +570,84 @@ def test_run_walk_forward_for_strategies() -> None:
     assert rows
     assert rows[0]["ticker"] == "SPY"
     assert rows[0]["strategy"] == "Stub Directional"
+
+
+def test_run_walk_forward_uses_fixed_horizon_metrics_by_default(monkeypatch) -> None:
+    metrics = MetricsCalculator()
+    monkeypatch.setattr(
+        metrics,
+        "add_directional_forward_metrics",
+        lambda df, snapshot_windows: _fixed_horizon_eval_df(),
+    )
+    windows = [
+        type("W", (), {
+            "train_start": date(2025, 1, 1),
+            "train_end": date(2025, 1, 1),
+            "test_start": date(2025, 1, 1),
+            "test_end": date(2025, 1, 1),
+        })()
+    ]
+
+    rows = run_walk_forward_for_strategies(
+        ticker="SPY",
+        df=_fixed_horizon_eval_df().select([
+            "timestamp",
+            "close",
+            "high",
+            "low",
+            "signal",
+            "signal_direction",
+        ]),
+        strategies=[_StubStrategy()],
+        windows=windows,
+        ratios=[1.0, 2.0],
+        metrics=metrics,
+        min_signals=1,
+        cost_r=0.0,
+    )
+
+    assert rows
+    assert {row["selected_ratio"] for row in rows} == {1.0}
+    assert {row["evaluation_window"] for row in rows} == {15}
+
+
+def test_execution_mapping_uses_fixed_horizon_metrics_by_default(monkeypatch) -> None:
+    metrics = MetricsCalculator()
+    monkeypatch.setattr(
+        execution_stage,
+        "build_candidate_strategy",
+        lambda candidate: _StubStrategy(),
+    )
+    monkeypatch.setattr(
+        metrics,
+        "add_directional_forward_metrics",
+        lambda df, snapshot_windows: _fixed_horizon_eval_df(),
+    )
+
+    rows = run_execution_mapping_for_candidates(
+        promoted=pl.DataFrame(
+            [{"ticker": "SPY", "strategy": "Stub Directional", "direction": "long"}]
+        ),
+        holdout_detail=pl.DataFrame(
+            [{"ticker": "SPY", "strategy": "Stub Directional", "direction": "long", "selected_ratio": 2.0}]
+        ),
+        ticker_frames={
+            "SPY": _fixed_horizon_eval_df().select([
+                "timestamp",
+                "close",
+                "high",
+                "low",
+                "signal",
+                "signal_direction",
+            ])
+        },
+        metrics=metrics,
+        holdout_start=date(2025, 1, 1),
+        holdout_end=date(2025, 1, 1),
+        base_cost_r=0.0,
+        stress_cfg=ExecutionStressConfig(bootstrap_iters=10),
+    )
+
+    assert rows
+    assert {row["evaluation_window"] for row in rows} == {15}
+    assert {row["base_exp_r"] for row in rows} == {-1.0}

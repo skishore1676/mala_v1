@@ -21,6 +21,7 @@ _NON_PARAM_COLUMNS = {
     "test_start",
     "test_end",
     "selected_ratio",
+    "evaluation_window",
     "train_signals",
     "train_confidence",
     "train_exp_r",

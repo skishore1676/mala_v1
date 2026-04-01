@@ -239,6 +239,7 @@ class ResearchToolbox:
         min_signals: int = 20,
         cost_r: float | None = None,
         cost_bps: float | None = None,
+        evaluation_window: int | None = None,
         min_total_signals: int | None = None,
         ticker_frames: dict[str, pl.DataFrame] | None = None,
         metrics: MetricsCalculator | None = None,
@@ -265,6 +266,7 @@ class ResearchToolbox:
             min_signals=min_signals,
             cost_r=cost_r,
             cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
             min_total_signals=min_total_signals,
             ticker_frames=ticker_frames,
             metrics=metrics,
@@ -317,6 +319,7 @@ class ResearchToolbox:
         min_signals: int = 20,
         cost_r: float | None = None,
         cost_bps: float | None = None,
+        evaluation_window: int | None = None,
         min_total_signals: int | None = None,
         ticker_frames: dict[str, pl.DataFrame] | None = None,
         metrics: MetricsCalculator | None = None,
@@ -353,6 +356,7 @@ class ResearchToolbox:
             min_signals=min_signals,
             cost_r=cost_r,
             cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
             min_total_signals=min_total_signals,
             ticker_frames=ticker_frames,
             metrics=metrics,
@@ -373,6 +377,7 @@ class ResearchToolbox:
         min_signals: int,
         cost_r: float | None = None,
         cost_bps: float | None = None,
+        evaluation_window: int | None = None,
     ) -> ResearchToolResult:
         rows = run_walk_forward_for_strategies(
             ticker=ticker,
@@ -384,6 +389,7 @@ class ResearchToolbox:
             min_signals=min_signals,
             cost_r=cost_r,
             cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
         )
         detail_df = pl.DataFrame(rows) if rows else pl.DataFrame()
         aggregate_df = aggregate_walk_forward(rows) if rows else pl.DataFrame()
@@ -440,6 +446,7 @@ class ResearchToolbox:
         costs: list[float],
         min_calibration_signals: int,
         min_holdout_signals: int,
+        evaluation_window: int | None = None,
     ) -> ResearchToolResult:
         detail_rows = run_holdout_validation_for_candidates(
             promoted=promoted,
@@ -453,6 +460,7 @@ class ResearchToolbox:
             costs=costs,
             min_calibration_signals=min_calibration_signals,
             min_holdout_signals=min_holdout_signals,
+            evaluation_window=evaluation_window,
         )
         detail_df = pl.DataFrame(detail_rows) if detail_rows else pl.DataFrame()
         summary_df = (
@@ -485,6 +493,7 @@ class ResearchToolbox:
         holdout_end,
         base_cost_r: float,
         stress_cfg: ExecutionStressConfig,
+        evaluation_window: int | None = None,
     ) -> ResearchToolResult:
         rows = run_execution_mapping_for_candidates(
             promoted=promoted,
@@ -495,6 +504,7 @@ class ResearchToolbox:
             holdout_end=holdout_end,
             base_cost_r=base_cost_r,
             stress_cfg=stress_cfg,
+            evaluation_window=evaluation_window,
         )
         detail_df = pl.DataFrame(rows) if rows else pl.DataFrame()
         return ResearchToolResult(
@@ -515,8 +525,15 @@ class ResearchToolbox:
         ratio: float,
         cost_bps: float,
         min_signals: int = 1,
+        evaluation_window: int | None = None,
     ) -> ResearchToolResult:
-        stats = eval_direction(df_eval, direction, ratio, cost_bps)
+        stats = eval_direction(
+            df_eval,
+            direction,
+            ratio,
+            cost_bps,
+            evaluation_window=evaluation_window,
+        )
         passes_min_signals = int(stats["signals"]) >= min_signals
         selected_ratio, chosen_stats = choose_ratio(
             calib_df=df_eval,
@@ -524,6 +541,7 @@ class ResearchToolbox:
             ratios=[ratio],
             cost_bps=cost_bps,
             min_calib_signals=min_signals,
+            evaluation_window=evaluation_window,
         )
         return ResearchToolResult(
             tool_name="evaluate_direction",
@@ -628,6 +646,7 @@ class ResearchToolbox:
         min_signals: int,
         cost_r: float | None,
         cost_bps: float | None,
+        evaluation_window: int | None,
         min_total_signals: int | None,
         ticker_frames: dict[str, pl.DataFrame] | None,
         metrics: MetricsCalculator | None,
@@ -677,6 +696,7 @@ class ResearchToolbox:
             min_signals=min_signals,
             cost_r=cost_r,
             cost_bps=cost_bps,
+            evaluation_window=evaluation_window,
         )
         aggregate_df = self._aggregate_sweep(detail_df, configs, min_total_signals=min_total_signals)
         aggregate_df = _annotate_plateau_metrics(aggregate_df, parameter_space=entry.parameter_space)
@@ -769,6 +789,7 @@ class ResearchToolbox:
         min_signals: int,
         cost_r: float | None,
         cost_bps: float | None,
+        evaluation_window: int | None,
     ) -> pl.DataFrame:
         detail_rows: list[dict[str, Any]] = []
         for strategy, config in zip(strategies, configs, strict=True):
@@ -783,6 +804,7 @@ class ResearchToolbox:
                     min_signals=min_signals,
                     cost_r=cost_r,
                     cost_bps=cost_bps,
+                    evaluation_window=evaluation_window,
                 )
                 for row in rows:
                     detail_rows.append(

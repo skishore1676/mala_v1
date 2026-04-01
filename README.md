@@ -265,6 +265,8 @@ The first reusable orchestration pieces now live in:
 
 Legacy stage runners now live under `scripts/legacy/`, and the active execution model is the reusable API surface in `src/research/` plus the top-level orchestrator preview CLI.
 
+Because the long-term system is intentionally agent-driven over a wide parameter surface, legacy runners should be treated as archived reference material rather than a parallel workflow. Future research changes should prefer reusable logic in `src/research/`, `src/oracle/`, and `src/newton/`, even when preserving backward compatibility for old scripts.
+
 The research flow also uses strategy-declared `required_features` to ask Newton only for the needed transforms, including parameterized `MarketImpulseTransform` variants through the same `enrich_for_features(...)` pipeline used by other strategies.
 
 A canonical execution pattern now exists for agentic research work:
@@ -296,6 +298,7 @@ Not every script in `scripts/` should be treated as equally supported.
 - Top-level utility: `query_results_db.py`
 - All runner-style CLIs now live under `scripts/legacy/`
 - New research execution should prefer `ResearchOrchestrator` and `src/research/tools.py` over direct legacy script use
+- Legacy scripts are archived for provenance and compatibility, not ongoing feature development
 
 The current keep/migrate/archive decision table lives in [scripts/STATUS.md](/Users/suman/kg_env/projects/mala_v1/scripts/STATUS.md).
 

@@ -13,7 +13,14 @@ Only these files should be treated as active entrypoints under `scripts/`:
 
 ## Quarantined Legacy Runners
 
-All runner-style CLIs now live under `scripts/legacy/`. They are preserved for provenance, replay, or comparison only. New productized research execution should go through `ResearchOrchestrator` and `src/research/tools.py`.
+All runner-style CLIs now live under `scripts/legacy/`. They are preserved for provenance, replay, or comparison only.
+
+This is now an agent-driven, API-first repo:
+
+- New research logic should land in `src/research/`, `src/oracle/`, or `src/newton/`.
+- New orchestration should go through `ResearchOrchestrator` and `src/research/tools.py`.
+- Legacy runners should be treated as archived, not as alternative active flows.
+- If a legacy script exposes behavior we still need, migrate that behavior into reusable modules instead of extending the script.
 
 | script | status | note |
 |---|---|---|

@@ -42,6 +42,20 @@ class MetricsCalculator:
     def directional_confidence_column(self) -> str:
         return f"confidence_{self.win_condition.label_suffix}"
 
+    @staticmethod
+    def _available_directional_snapshot_windows(df: pl.DataFrame) -> tuple[int, ...]:
+        mfe_windows = {
+            int(column.removeprefix("forward_mfe_"))
+            for column in df.columns
+            if column.startswith("forward_mfe_") and column.removeprefix("forward_mfe_").isdigit()
+        }
+        mae_windows = {
+            int(column.removeprefix("forward_mae_"))
+            for column in df.columns
+            if column.startswith("forward_mae_") and column.removeprefix("forward_mae_").isdigit()
+        }
+        return tuple(sorted(mfe_windows & mae_windows))
+
     # ── Public ───────────────────────────────────────────────────────────
 
     def add_forward_metrics(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -279,6 +293,7 @@ class MetricsCalculator:
             logger.warning("No valid directional signals to summarise.")
             return pl.DataFrame()
 
+        snapshot_windows = self._available_directional_snapshot_windows(signals_df)
         rows = []
         for direction_filter, label in [
             (None, "Combined"),
@@ -319,14 +334,13 @@ class MetricsCalculator:
             }
 
             # Add snapshot window metrics if available
-            for w in (30, 60):
+            for w in snapshot_windows:
                 mfe_col = f"forward_mfe_{w}"
                 mae_col = f"forward_mae_{w}"
-                if mfe_col in subset.columns:
-                    valid = subset.drop_nulls(subset=[mfe_col, mae_col])
-                    if not valid.is_empty():
-                        row[f"avg_mfe_{w}m"] = round(float(valid[mfe_col].mean()), 4)
-                        row[f"avg_mae_{w}m"] = round(float(valid[mae_col].mean()), 4)
+                valid = subset.drop_nulls(subset=[mfe_col, mae_col])
+                if not valid.is_empty():
+                    row[f"avg_mfe_{w}m"] = round(float(valid[mfe_col].mean()), 4)
+                    row[f"avg_mae_{w}m"] = round(float(valid[mae_col].mean()), 4)
 
             rows.append(row)
 
