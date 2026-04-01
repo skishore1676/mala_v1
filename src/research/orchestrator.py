@@ -15,11 +15,18 @@ _STAGE_ACTIONS: dict[ResearchStage, list[tuple[str, str, str]]] = {
         ("parameter_sweep", "parameter_sweep", "Search for any edge in the declared parameter space."),
         ("baseline_comparison", "baseline_comparison", "Compare the candidate against the refactor validation baselines."),
         ("evaluate_config", "evaluate_config", "Evaluate one exact config and record compact optimizer memory."),
+        ("query_incumbent", "query_incumbent", "Retrieve the best competitive config inside the current research slice."),
+        ("query_pareto_front", "query_pareto_front", "Inspect the slice-local trade-off frontier before proposing the next probe."),
+        ("query_dead_zones", "query_dead_zones", "Find unproductive regions already ruled out inside the current research slice."),
     ],
     ResearchStage.M2_CONVERGENCE: [
         ("convergence_grid", "convergence_grid", "Stress the candidate across friction and stability assumptions."),
         ("ablation_check", "ablation_check", "Test whether the proposed edge survives key feature removal."),
         ("evaluate_config", "evaluate_config", "Probe one exact config while preserving compact search memory."),
+        ("query_incumbent", "query_incumbent", "Recover the best competitive config inside the active convergence slice."),
+        ("query_pareto_front", "query_pareto_front", "Review the convergence slice frontier before spending more budget."),
+        ("query_neighborhood", "query_neighborhood", "Search near a proposed incumbent within the same convergence slice."),
+        ("query_dead_zones", "query_dead_zones", "Avoid dead regions already observed inside the active convergence slice."),
     ],
     ResearchStage.M3_WALK_FORWARD: [
         ("walk_forward", "walk_forward", "Select parameters on train windows and verify OOS adaptation."),

@@ -241,6 +241,36 @@ def _entry_search_space(
     return {key: list(values) for key, values in entry.parameter_space.items()}
 
 
+def _normalized_slice_filter(
+    *,
+    ticker: str | None = None,
+    slice_filter: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = _json_ready(slice_filter or {})
+    if ticker is not None:
+        existing_tickers = normalized.get("tickers")
+        if existing_tickers is None:
+            normalized["tickers"] = [ticker]
+        elif isinstance(existing_tickers, list) and ticker not in existing_tickers:
+            normalized["tickers"] = sorted([*existing_tickers, ticker])
+    if "tickers" in normalized and isinstance(normalized["tickers"], list):
+        normalized["tickers"] = sorted(str(item) for item in normalized["tickers"])
+    return normalized
+
+
+def _slice_matches(payload_slice: dict[str, Any], slice_filter: dict[str, Any]) -> bool:
+    if not slice_filter:
+        return True
+    normalized_slice = _json_ready(payload_slice)
+    if "tickers" in normalized_slice and isinstance(normalized_slice["tickers"], list):
+        normalized_slice["tickers"] = sorted(str(item) for item in normalized_slice["tickers"])
+    for key, expected in slice_filter.items():
+        actual = normalized_slice.get(key)
+        if actual != expected:
+            return False
+    return True
+
+
 def _dedupe_strategy_variants(
     configs: list[dict[str, Any]],
     strategies: list[BaseStrategy],
@@ -369,8 +399,23 @@ class ResearchToolbox:
 
     def available_tools(self, stage: ResearchStage) -> list[str]:
         stage_tools = {
-            ResearchStage.M1_DISCOVERY: ["parameter_sweep", "baseline_comparison", "evaluate_config"],
-            ResearchStage.M2_CONVERGENCE: ["convergence_grid", "ablation_check", "evaluate_config"],
+            ResearchStage.M1_DISCOVERY: [
+                "parameter_sweep",
+                "baseline_comparison",
+                "evaluate_config",
+                "query_incumbent",
+                "query_pareto_front",
+                "query_dead_zones",
+            ],
+            ResearchStage.M2_CONVERGENCE: [
+                "convergence_grid",
+                "ablation_check",
+                "evaluate_config",
+                "query_incumbent",
+                "query_pareto_front",
+                "query_neighborhood",
+                "query_dead_zones",
+            ],
             ResearchStage.M3_WALK_FORWARD: ["walk_forward"],
             ResearchStage.M4_HOLDOUT: ["holdout_validation"],
             ResearchStage.M5_EXECUTION: ["execution_mapping"],
@@ -608,11 +653,17 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        slice_filter: dict[str, Any] | None = None,
         include_non_competitive: bool = False,
     ) -> ResearchToolResult:
+        normalized_slice_filter = _normalized_slice_filter(
+            ticker=ticker,
+            slice_filter=slice_filter,
+        )
         rows = self._memory_rows(
             strategy_name,
             ticker=ticker,
+            slice_filter=normalized_slice_filter,
             include_non_competitive=include_non_competitive,
         )
         if not rows:
@@ -621,6 +672,7 @@ class ResearchToolbox:
                 summary={
                     "strategy": strategy_name,
                     "ticker": ticker,
+                    "slice_filter": normalized_slice_filter,
                     "status": "empty",
                     "include_non_competitive": include_non_competitive,
                 },
@@ -633,6 +685,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok",
                 "evaluated_configs": len(rows),
+                "slice_filter": normalized_slice_filter,
                 "include_non_competitive": include_non_competitive,
                 "incumbent": self._compact_memory_row(best),
             },
@@ -643,13 +696,19 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        slice_filter: dict[str, Any] | None = None,
         limit: int = 10,
         include_non_competitive: bool = False,
     ) -> ResearchToolResult:
+        normalized_slice_filter = _normalized_slice_filter(
+            ticker=ticker,
+            slice_filter=slice_filter,
+        )
         rows = self._sort_memory_rows(
             self._memory_rows(
                 strategy_name,
                 ticker=ticker,
+                slice_filter=normalized_slice_filter,
                 include_non_competitive=include_non_competitive,
             )
         )
@@ -668,6 +727,7 @@ class ResearchToolbox:
                 "ticker": ticker,
                 "status": "ok" if pareto else "empty",
                 "front_size": len(pareto),
+                "slice_filter": normalized_slice_filter,
                 "include_non_competitive": include_non_competitive,
                 "pareto_front": [self._compact_memory_row(row) for row in pareto[:limit]],
             },
@@ -678,11 +738,17 @@ class ResearchToolbox:
         strategy_name: str,
         config: dict[str, Any],
         *,
+        ticker: str | None = None,
+        slice_filter: dict[str, Any] | None = None,
         radius: int = 1,
         limit: int = 5,
     ) -> ResearchToolResult:
         entry = self.registry.catalog_entry(strategy_name)
         normalized_config, inactive_parameters, errors = _normalize_strategy_config(entry, config)
+        normalized_slice_filter = _normalized_slice_filter(
+            ticker=ticker,
+            slice_filter=slice_filter,
+        )
         if errors:
             return ResearchToolResult(
                 tool_name="query_neighborhood",
@@ -692,7 +758,11 @@ class ResearchToolbox:
                     "errors": errors,
                 },
             )
-        rows = self._memory_rows(strategy_name)
+        rows = self._memory_rows(
+            strategy_name,
+            ticker=ticker,
+            slice_filter=normalized_slice_filter,
+        )
         nearby: list[dict[str, Any]] = []
         for row in rows:
             distance = _config_distance(entry.search_spec, normalized_config, row["config"])
@@ -713,9 +783,11 @@ class ResearchToolbox:
             tool_name="query_neighborhood",
             summary={
                 "strategy": strategy_name,
+                "ticker": ticker,
                 "status": "ok" if nearby else "empty",
                 "center_config": normalized_config,
                 "inactive_parameters": inactive_parameters,
+                "slice_filter": normalized_slice_filter,
                 "radius": radius,
                 "neighbors": [self._compact_memory_row(row) for row in nearby[:limit]],
             },
@@ -726,8 +798,18 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        slice_filter: dict[str, Any] | None = None,
     ) -> ResearchToolResult:
-        rows = self._memory_rows(strategy_name, ticker=ticker, include_non_ok=True)
+        normalized_slice_filter = _normalized_slice_filter(
+            ticker=ticker,
+            slice_filter=slice_filter,
+        )
+        rows = self._memory_rows(
+            strategy_name,
+            ticker=ticker,
+            slice_filter=normalized_slice_filter,
+            include_non_ok=True,
+        )
         entry = self.registry.catalog_entry(strategy_name)
         dead_zones: list[dict[str, Any]] = []
         for parameter in (entry.search_spec.parameters if entry.search_spec is not None else []):
@@ -778,6 +860,7 @@ class ResearchToolbox:
             summary={
                 "strategy": strategy_name,
                 "ticker": ticker,
+                "slice_filter": normalized_slice_filter,
                 "status": "ok" if dead_zones else "empty",
                 "dead_zones": dead_zones[:5],
             },
@@ -1276,10 +1359,16 @@ class ResearchToolbox:
         strategy_name: str,
         *,
         ticker: str | None = None,
+        slice_filter: dict[str, Any] | None = None,
         include_non_ok: bool = False,
         include_non_competitive: bool = True,
     ) -> list[dict[str, Any]]:
         rows = self._results_db.list_research_evaluations(strategy=strategy_name, ticker=ticker)
+        if slice_filter:
+            rows = [
+                row for row in rows
+                if _slice_matches(row.get("slice", {}), slice_filter)
+            ]
         if include_non_ok:
             return rows
         filtered = [row for row in rows if row.get("status") != "invalid"]

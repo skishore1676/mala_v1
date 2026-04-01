@@ -178,11 +178,19 @@ def test_orchestrator_exposes_next_actions(tmp_path: Path) -> None:
         "convergence_grid",
         "ablation_check",
         "evaluate_config",
+        "query_incumbent",
+        "query_pareto_front",
+        "query_neighborhood",
+        "query_dead_zones",
     ]
     assert [action.tool_name for action in actions] == [
         "convergence_grid",
         "ablation_check",
         "evaluate_config",
+        "query_incumbent",
+        "query_pareto_front",
+        "query_neighborhood",
+        "query_dead_zones",
     ]
     assert all(action.agent_can_run for action in actions)
 
@@ -199,6 +207,9 @@ def test_orchestrator_exposes_toolbox(tmp_path: Path) -> None:
         "parameter_sweep",
         "baseline_comparison",
         "evaluate_config",
+        "query_incumbent",
+        "query_pareto_front",
+        "query_dead_zones",
     ]
 
 
@@ -774,6 +785,90 @@ def test_toolbox_compact_memory_queries_summarize_without_dumping_history(tmp_pa
     assert len(neighborhood.summary["neighbors"]) >= 1
     assert pareto.summary["status"] == "ok"
     assert pareto.summary["front_size"] >= 1
+
+
+def test_memory_queries_can_scope_to_the_active_research_slice(tmp_path: Path) -> None:
+    toolbox = ResearchToolbox(results_db_path=tmp_path / "research_results.db")
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "config": {
+                "z_score_threshold": 1.0,
+                "z_score_window": 360,
+                "kinematic_periods_back": 1,
+                "use_directional_mass": True,
+            },
+            "config_signature": "slice-a",
+            "request_signature": "slice-a:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.07, "confidence": 0.55},
+            "constraints": {"total_signals": 100, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": {
+                "tickers": ["META"],
+                "start_date": "2025-01-01",
+                "end_date": "2025-05-31",
+                "train_months": 2,
+                "test_months": 1,
+            },
+            "errors": [],
+        }
+    )
+    toolbox._results_db.store_research_evaluation(
+        {
+            "strategy": "Elastic Band Reversion",
+            "config": {
+                "z_score_threshold": 2.0,
+                "z_score_window": 360,
+                "kinematic_periods_back": 1,
+                "use_directional_mass": True,
+            },
+            "config_signature": "slice-b",
+            "request_signature": "slice-b:req",
+            "status": "ok",
+            "already_evaluated": False,
+            "inactive_parameters": [],
+            "objective": {"primary_metric": "avg_test_exp_r", "value": 0.19, "confidence": 0.72},
+            "constraints": {"total_signals": 180, "passes_signal_floor": True},
+            "runtime_seconds": 0.1,
+            "slice": {
+                "tickers": ["META"],
+                "start_date": "2025-06-01",
+                "end_date": "2025-10-31",
+                "train_months": 2,
+                "test_months": 1,
+            },
+            "errors": [],
+        }
+    )
+
+    incumbent = toolbox.query_incumbent(
+        "Elastic Band Reversion",
+        ticker="META",
+        slice_filter={"start_date": "2025-01-01", "end_date": "2025-05-31"},
+    )
+    pareto = toolbox.query_pareto_front(
+        "Elastic Band Reversion",
+        ticker="META",
+        slice_filter={"start_date": "2025-01-01", "end_date": "2025-05-31"},
+    )
+    neighborhood = toolbox.query_neighborhood(
+        "Elastic Band Reversion",
+        {
+            "z_score_threshold": 1.0,
+            "z_score_window": 360,
+            "kinematic_periods_back": 1,
+            "use_directional_mass": True,
+        },
+        ticker="META",
+        slice_filter={"start_date": "2025-01-01", "end_date": "2025-05-31"},
+    )
+
+    assert incumbent.summary["incumbent"]["config_signature"] == "slice-a"
+    assert [row["config_signature"] for row in pareto.summary["pareto_front"]] == ["slice-a"]
+    assert {row["config_signature"] for row in neighborhood.summary["neighbors"]} == {"slice-a"}
 
 
 def test_incumbent_and_pareto_exclude_insufficient_configs_by_default(tmp_path: Path) -> None:

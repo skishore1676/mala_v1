@@ -287,7 +287,9 @@ Agent-native search conventions now in force:
 - When a strategy exposes `search_spec`, that is the canonical optimization surface for sweeps and point evaluation.
 - `parameter_sweep()` applies gating and constraint normalization before spending search budget, so inactive parameters are pruned rather than rediscovered through downstream deduping.
 - `evaluate_config()` records deterministic config signatures plus compact memory rows for iterative optimization.
+- Memory queries can be scoped to the active research slice, not just strategy name, so agents can stay inside the same symbol/date/evaluation context while optimizing.
 - `query_incumbent()` and `query_pareto_front()` rank only statistically competitive configs by default; low-signal or otherwise insufficient evaluations are excluded unless explicitly requested.
+- Slice-local memory queries are part of the canonical stage loop in M1/M2, alongside sweeps and point evaluation, rather than an out-of-band helper surface.
 - `src.research` is safe to import from strategy-adjacent code because the package surface now lazily loads heavier orchestration modules instead of importing them eagerly.
 
 A canonical execution pattern now exists for agentic research work:
