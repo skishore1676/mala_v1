@@ -46,7 +46,14 @@ class PhysicsEngine:
 
     @property
     def available_transforms(self) -> list[str]:
-        return [*self._registry, "market_impulse[:timeframe]"]
+        return [
+            *self._registry,
+            "velocity[:periods_back]",
+            "acceleration[:periods_back]",
+            "jerk[:periods_back]",
+            "market_impulse[:timeframe]",
+            "market_impulse_vwma_<short>_<medium>_<long>",
+        ]
 
     def enrich(self, df: pl.DataFrame) -> pl.DataFrame:
         required = {"open", "high", "low", "close", "volume"}
@@ -65,8 +72,41 @@ class PhysicsEngine:
             for transform in self._registry.values()
             if transform.name in required_features or set(required_features) & transform.output_columns
         ]
+        candidates.extend(self._kinematic_transforms_for_features(required_features))
         candidates.extend(self._market_impulse_transforms_for_features(required_features))
         return self._resolve_transforms(candidates)
+
+    def _kinematic_transforms_for_features(
+        self,
+        required_features: set[str],
+    ) -> list[FeatureTransform]:
+        transforms: list[FeatureTransform] = []
+        for feature in sorted(required_features):
+            spec_match = _KINEMATIC_SPEC_RE.fullmatch(feature)
+            if spec_match:
+                periods_back = int(spec_match.group("periods_back") or "1")
+                if periods_back > 1:
+                    transforms.append(
+                        self._build_kinematic_transform(
+                            spec_match.group("kind"),
+                            periods_back,
+                        )
+                    )
+                continue
+
+            column_match = _KINEMATIC_COLUMN_RE.fullmatch(feature)
+            if not column_match:
+                continue
+            periods_back = int(column_match.group("periods_back"))
+            if periods_back <= 1:
+                continue
+            transforms.append(
+                self._build_kinematic_transform(
+                    _KINEMATIC_COLUMN_KIND[column_match.group("kind")],
+                    periods_back,
+                )
+            )
+        return transforms
 
     def _market_impulse_transforms_for_features(
         self,
@@ -75,6 +115,7 @@ class PhysicsEngine:
         requests: dict[str, set[int]] = {}
         base_requested = False
         base_lengths: set[int] = set()
+        requested_vwma_periods: set[tuple[int, int, int]] = set()
 
         def add_request(timeframe: str = "5m", vma_length: int | None = None) -> None:
             lengths = requests.setdefault(timeframe, set())
@@ -85,6 +126,17 @@ class PhysicsEngine:
             spec_match = _MARKET_IMPULSE_SPEC_RE.fullmatch(feature)
             if spec_match:
                 add_request(spec_match.group("timeframe") or "5m")
+                continue
+
+            vwma_spec_match = _MARKET_IMPULSE_VWMA_SPEC_RE.fullmatch(feature)
+            if vwma_spec_match:
+                requested_vwma_periods.add(
+                    (
+                        int(vwma_spec_match.group("short")),
+                        int(vwma_spec_match.group("medium")),
+                        int(vwma_spec_match.group("long")),
+                    )
+                )
                 continue
 
             impulse_match = _MARKET_IMPULSE_COLUMN_RE.fullmatch(feature)
@@ -127,6 +179,16 @@ class PhysicsEngine:
                     )
 
         transforms: list[FeatureTransform] = []
+        if len(requested_vwma_periods) > 1:
+            raise ValueError(
+                "Market Impulse feature request mixes multiple VWMA period stacks: "
+                f"{sorted(requested_vwma_periods)}"
+            )
+        resolved_vwma_periods = (
+            next(iter(requested_vwma_periods))
+            if requested_vwma_periods
+            else tuple(settings.vwma_periods)
+        )
         for timeframe, lengths in sorted(requests.items()):
             if len(lengths) > 1:
                 raise ValueError(
@@ -136,7 +198,7 @@ class PhysicsEngine:
             transforms.append(
                 MarketImpulseTransform(
                     vma_length=next(iter(lengths), settings.vma_length),
-                    vwma_periods=tuple(settings.vwma_periods),
+                    vwma_periods=resolved_vwma_periods,
                     timeframe=timeframe,
                 )
             )
@@ -153,6 +215,16 @@ class PhysicsEngine:
             VpocTransform(lookback=self.vpoc_lookback),
         ]
         return {transform.name: transform for transform in transforms}
+
+    @staticmethod
+    def _build_kinematic_transform(kind: str, periods_back: int) -> FeatureTransform:
+        if kind == "velocity":
+            return VelocityTransform(periods_back=periods_back)
+        if kind == "acceleration":
+            return AccelerationTransform(periods_back=periods_back)
+        if kind == "jerk":
+            return JerkTransform(periods_back=periods_back)
+        raise KeyError(f"Unknown kinematic transform {kind!r}")
 
     def _default_transforms(self) -> tuple[FeatureTransform, ...]:
         return (
@@ -187,6 +259,12 @@ class PhysicsEngine:
 
     def _coerce_transform(self, item: FeatureTransform | str) -> FeatureTransform:
         if isinstance(item, str):
+            kinematic_match = _KINEMATIC_SPEC_RE.fullmatch(item)
+            if kinematic_match:
+                return self._build_kinematic_transform(
+                    kinematic_match.group("kind"),
+                    int(kinematic_match.group("periods_back") or "1"),
+                )
             spec_match = _MARKET_IMPULSE_SPEC_RE.fullmatch(item)
             if spec_match:
                 return MarketImpulseTransform(
@@ -228,3 +306,17 @@ _MARKET_IMPULSE_COLUMN_RE = re.compile(
 _MARKET_IMPULSE_VMA_RE = re.compile(
     r"^vma_(?P<vma_length>\d+)(?:_(?P<timeframe>[0-9]+[A-Za-z]+))?$"
 )
+_MARKET_IMPULSE_VWMA_SPEC_RE = re.compile(
+    r"^market_impulse_vwma_(?P<short>\d+)_(?P<medium>\d+)_(?P<long>\d+)$"
+)
+_KINEMATIC_SPEC_RE = re.compile(
+    r"^(?P<kind>velocity|acceleration|jerk)(?::(?P<periods_back>\d+))?$"
+)
+_KINEMATIC_COLUMN_RE = re.compile(
+    r"^(?P<kind>velocity|accel|jerk)_(?P<periods_back>\d+)$"
+)
+_KINEMATIC_COLUMN_KIND = {
+    "velocity": "velocity",
+    "accel": "acceleration",
+    "jerk": "jerk",
+}

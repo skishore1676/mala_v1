@@ -9,6 +9,7 @@ import pytest
 from src.newton.engine import PhysicsEngine
 from src.newton.resampler import TimeframeResampler
 from src.newton.transforms import JerkTransform, MarketImpulseTransform
+from src.strategy.base import required_feature_union
 from src.strategy.market_impulse import MarketImpulseStrategy
 
 
@@ -139,6 +140,37 @@ class TestPhysicsEngine:
         assert "ema_4" not in result.columns
         assert "directional_mass" not in result.columns
 
+    def test_parameterized_velocity_uses_multi_bar_difference(
+        self,
+        sample_ohlcv: pl.DataFrame,
+    ) -> None:
+        engine = PhysicsEngine(vpoc_lookback=50)
+        result = engine.enrich_for_features(sample_ohlcv, {"velocity_3"})
+
+        close = result["close"].to_numpy()
+        velocity = result["velocity_3"].to_numpy()
+        np.testing.assert_almost_equal(velocity[3], close[3] - close[0], decimal=10)
+        assert "velocity_1m" not in result.columns
+
+    def test_parameterized_jerk_features_resolve_matching_dependencies(
+        self,
+        sample_ohlcv: pl.DataFrame,
+    ) -> None:
+        engine = PhysicsEngine(vpoc_lookback=50)
+        result = engine.enrich_for_features(sample_ohlcv, {"jerk_3"})
+
+        assert {"velocity_3", "accel_3", "jerk_3"}.issubset(result.columns)
+        assert "jerk_1m" not in result.columns
+
+    def test_parameterized_kinematic_transform_specs_are_supported(
+        self,
+        sample_ohlcv: pl.DataFrame,
+    ) -> None:
+        engine = PhysicsEngine(transforms=["jerk:3"])
+        result = engine.enrich(sample_ohlcv)
+
+        assert {"velocity_3", "accel_3", "jerk_3"}.issubset(result.columns)
+
 
 def test_resampler_joins_without_lookahead() -> None:
     timestamps = [datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i) for i in range(6)]
@@ -184,6 +216,16 @@ def test_market_impulse_transform_supports_custom_timeframe() -> None:
     assert "impulse_regime_15m" in result.columns
     assert "impulse_stage_15m" in result.columns
     assert "vma_10_15m" in result.columns
+
+
+def test_market_impulse_transform_rejects_invalid_vwma_order() -> None:
+    with pytest.raises(ValueError, match="strictly increasing"):
+        MarketImpulseTransform(vwma_periods=(34, 21, 8))
+
+
+def test_market_impulse_transform_rejects_invalid_vwma_count() -> None:
+    with pytest.raises(ValueError, match="exactly three"):
+        MarketImpulseTransform(vwma_periods=(8, 21))
 
 
 def test_enrich_for_features_accepts_market_impulse_transform_name() -> None:
@@ -277,7 +319,7 @@ def test_market_impulse_strategy_declares_pipeline_resolvable_features() -> None
     )
     strategy = MarketImpulseStrategy()
     engine = PhysicsEngine()
-    result = engine.enrich_for_features(df, strategy.required_features)
+    result = engine.enrich_for_features(df, required_feature_union([strategy]))
 
     assert strategy.required_features.issubset(result.columns)
     assert "vma_10_5m" in result.columns
@@ -297,7 +339,30 @@ def test_market_impulse_strategy_can_request_alternate_regime_timeframe() -> Non
     )
     strategy = MarketImpulseStrategy(regime_timeframe="15m")
     engine = PhysicsEngine()
-    result = engine.enrich_for_features(df, strategy.required_features)
+    result = engine.enrich_for_features(df, required_feature_union([strategy]))
 
     assert "impulse_regime_15m" in result.columns
+    assert strategy.required_features.issubset(result.columns)
+
+
+def test_market_impulse_strategy_can_request_alternate_vwma_stack() -> None:
+    timestamps = [datetime(2025, 1, 2, 14, 30) + timedelta(minutes=i) for i in range(40)]
+    df = pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(100, 102, 40),
+            "high": np.linspace(100.1, 102.1, 40),
+            "low": np.linspace(99.9, 101.9, 40),
+            "close": np.linspace(100, 102, 40),
+            "volume": np.full(40, 1000.0),
+        }
+    )
+    strategy = MarketImpulseStrategy(vwma_periods=(5, 13, 21))
+    engine = PhysicsEngine()
+    result = engine.enrich_for_features(df, required_feature_union([strategy]))
+
+    assert "vwma_5" in result.columns
+    assert "vwma_13" in result.columns
+    assert "vwma_21" in result.columns
+    assert "vwma_34" not in result.columns
     assert strategy.required_features.issubset(result.columns)

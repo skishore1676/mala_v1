@@ -33,6 +33,12 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.newton.transforms import (
+    acceleration_column_name,
+    jerk_column_name,
+    validate_periods_back,
+    velocity_column_name,
+)
 from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_time_expr
 
@@ -54,6 +60,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         use_time_filter: bool = True,
         session_start: time | str = time(9, 35),
         session_end: time | str = time(15, 30),
+        kinematic_periods_back: int = 1,
         strategy_label: str | None = None,
     ) -> None:
         self.vpoc_proximity_pct = vpoc_proximity_pct
@@ -64,6 +71,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         self.use_time_filter = use_time_filter
         self.session_start = coerce_time(session_start)
         self.session_end = coerce_time(session_end)
+        self.kinematic_periods_back = validate_periods_back(kinematic_periods_back)
         self._strategy_label = strategy_label
 
     @property
@@ -80,9 +88,9 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         return {
             "timestamp",
             "close",
-            "velocity_1m",
-            "accel_1m",
-            "jerk_1m",
+            velocity_column_name(self.kinematic_periods_back),
+            acceleration_column_name(self.kinematic_periods_back),
+            jerk_column_name(self.kinematic_periods_back),
             "vpoc_4h",
             "volume",
             f"volume_ma_{self.volume_ma_period}",
@@ -93,6 +101,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         return {
             "vpoc_proximity_pct": [0.0015, 0.002, 0.003],
             "jerk_lookback": [8, 10, 12],
+            "kinematic_periods_back": [1, 3, 5],
             "volume_multiplier": [1.0, 1.1, 1.2, 1.3],
             "use_volume_filter": [True, False],
         }
@@ -109,6 +118,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             "volume_ma_period": self.volume_ma_period,
             "use_volume_filter": self.use_volume_filter,
             "use_time_filter": self.use_time_filter,
+            "kinematic_periods_back": self.kinematic_periods_back,
             "session_start": self.session_start.isoformat(timespec="minutes"),
             "session_end": self.session_end.isoformat(timespec="minutes"),
             "strategy_label": self._strategy_label,
@@ -127,10 +137,13 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
 
         vol_ma_col = f"volume_ma_{self.volume_ma_period}"
+        velocity_col = velocity_column_name(self.kinematic_periods_back)
+        accel_col = acceleration_column_name(self.kinematic_periods_back)
+        jerk_col = jerk_column_name(self.kinematic_periods_back)
 
         # ── Smooth jerk over a short rolling window to reduce noise ──────
         df = df.with_columns(
-            pl.col("jerk_1m")
+            pl.col(jerk_col)
             .rolling_mean(window_size=self.jerk_lookback)
             .alias("_jerk_smooth")
         )
@@ -167,8 +180,8 @@ class JerkPivotMomentumStrategy(BaseStrategy):
         )
 
         # ── Kinematic alignment ──────────────────────────────────────────
-        long_kinematic = (pl.col("velocity_1m") > 0) & (pl.col("accel_1m") > 0)
-        short_kinematic = (pl.col("velocity_1m") < 0) & (pl.col("accel_1m") < 0)
+        long_kinematic = (pl.col(velocity_col) > 0) & (pl.col(accel_col) > 0)
+        short_kinematic = (pl.col(velocity_col) < 0) & (pl.col(accel_col) < 0)
 
         # ── Volume gate ───────────────────────────────────────────────────
         volume_gate = (
@@ -221,7 +234,8 @@ class JerkPivotMomentumStrategy(BaseStrategy):
 
         logger.info(
             "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
-            "[vol_filter={}, vpoc_prox={:.3f}, jerk_lookback={}, volume_multiplier={:.2f}]",
+            "[vol_filter={}, vpoc_prox={:.3f}, jerk_lookback={}, kinematic_periods_back={}, "
+            "volume_multiplier={:.2f}]",
             self.name,
             total,
             longs,
@@ -230,6 +244,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
             self.use_volume_filter,
             self.vpoc_proximity_pct,
             self.jerk_lookback,
+            self.kinematic_periods_back,
             self.volume_multiplier,
         )
         return df

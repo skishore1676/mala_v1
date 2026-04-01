@@ -15,6 +15,7 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.newton.transforms import validate_periods_back, velocity_column_name
 from src.strategy.base import BaseStrategy
 from src.time_utils import et_time_expr
 
@@ -33,6 +34,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
         use_volume_filter: bool = True,
         session_start: time = time(9, 40),
         session_end: time = time(15, 30),
+        velocity_periods_back: int = 1,
     ) -> None:
         self.compression_window = compression_window
         self.breakout_lookback = breakout_lookback
@@ -43,6 +45,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
         self.use_volume_filter = use_volume_filter
         self.session_start = session_start
         self.session_end = session_end
+        self.velocity_periods_back = validate_periods_back(velocity_periods_back)
 
     @property
     def name(self) -> str:
@@ -57,7 +60,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
             "low",
             "ema_8",
             "ema_12",
-            "velocity_1m",
+            velocity_column_name(self.velocity_periods_back),
             "volume",
             f"volume_ma_{self.volume_ma_period}",
         }
@@ -68,6 +71,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
             "compression_window": [15, 20, 30],
             "breakout_lookback": [15, 20],
             "compression_factor": [0.7, 0.8, 0.9],
+            "velocity_periods_back": [1, 3, 5],
             "use_volume_filter": [True, False],
         }
 
@@ -84,6 +88,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
             "volume_multiplier": self.volume_multiplier,
             "use_time_filter": self.use_time_filter,
             "use_volume_filter": self.use_volume_filter,
+            "velocity_periods_back": self.velocity_periods_back,
             "session_start": self.session_start.isoformat(timespec="minutes"),
             "session_end": self.session_end.isoformat(timespec="minutes"),
         }
@@ -95,6 +100,7 @@ class CompressionBreakoutStrategy(BaseStrategy):
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
 
         vol_ma_col = f"volume_ma_{self.volume_ma_period}"
+        velocity_col = velocity_column_name(self.velocity_periods_back)
 
         df = df.with_columns([
             pl.col("close")
@@ -131,8 +137,8 @@ class CompressionBreakoutStrategy(BaseStrategy):
         long_breakout = pl.col("close") > pl.col("_prior_high")
         short_breakout = pl.col("close") < pl.col("_prior_low")
 
-        trigger_long = pl.col("velocity_1m") > 0
-        trigger_short = pl.col("velocity_1m") < 0
+        trigger_long = pl.col(velocity_col) > 0
+        trigger_short = pl.col(velocity_col) < 0
 
         if self.use_time_filter:
             time_gate = (
@@ -161,12 +167,13 @@ class CompressionBreakoutStrategy(BaseStrategy):
 
         logger.info(
             "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
-            "[vol_filter={}]",
+            "[vol_filter={}, velocity_periods_back={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
             self.use_volume_filter,
+            self.velocity_periods_back,
         )
         return df

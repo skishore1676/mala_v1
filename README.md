@@ -45,6 +45,7 @@ The current architectural pressure point is not `Chronos`; it is orchestration a
 - `Chronos` remains the stable data foundation for now.
 - `Newton` is moving toward composable feature transforms plus centralized multi-timeframe handling instead of letting MTF logic spread into scripts.
 - `Newton` now exposes a composable transform pipeline and reusable timeframe resampler while keeping `PhysicsEngine` as the compatibility facade.
+- `Newton` now exposes additive parameterized kinematic features so agents can request bounded multi-bar derivatives without redefining existing `*_1m` semantics.
 - `Oracle` is moving toward a cleaner split between evaluation policy, simulation logic, and persistence/reporting.
 - `Strategy` is moving toward richer metadata for orchestration, including required features, parameter space, and evaluation mode.
 
@@ -72,7 +73,8 @@ Polygon API (1-min OHLCV)
   -> load_bars(ticker, start, end)
   -> Newton enrich():
        feature-targeted transform pipeline based on selected strategy requirements
-       (velocity_1m, accel_1m, jerk_1m, ema_*, volume_ma_*,
+       (velocity_1m, accel_1m, jerk_1m, velocity_3/5, accel_3/5, jerk_3/5,
+       ema_*, volume_ma_*,
        internal_strength, directional_mass, directional_mass_ma_*, vpoc_4h, MTF features)
   -> Strategy generate_signals():
        signal (and signal_direction for directional strategies)
@@ -95,9 +97,19 @@ Newton can now be used in two ways:
 
 For multi-timeframe research, `MarketImpulseTransform` now uses a reusable `TimeframeResampler` so higher-timeframe joins are handled consistently instead of being hand-coded inside scripts. The feature pipeline also accepts parameterized transform specs such as `market_impulse:15m`, allowing agents to sweep regime timeframes without adding Newton special cases.
 
+Agent-safe Newton surface:
+
+- Existing names like `velocity_1m`, `accel_1m`, and `jerk_1m` keep their original one-bar meaning.
+- Additive multi-bar variants such as `velocity_3`, `accel_3`, and `jerk_3` are resolved on demand through `required_features` / `enrich_for_features(...)`.
+- Market Impulse VWMA stacks are structurally validated: exactly three periods, strictly increasing.
+- Canonical bounded sweeps should prefer discrete choices such as `kinematic_periods_back in {1, 3, 5}` and VWMA stacks like `(5, 13, 21)`, `(8, 21, 34)`, `(10, 20, 40)`.
+
 - `velocity_1m = close[t] - close[t-1]`
 - `accel_1m = velocity_1m[t] - velocity_1m[t-1]`
 - `jerk_1m = accel_1m[t] - accel_1m[t-1]`
+- `velocity_n = close[t] - close[t-n]` for bounded multi-bar differencing
+- `accel_n = velocity_n[t] - velocity_n[t-n]`
+- `jerk_n = accel_n[t] - accel_n[t-n]`
 - `ema_p`: exponential moving average of `close` for period `p`
 - `volume_ma_n`: rolling mean of `volume` over `n` bars
 - `internal_strength = ((close - low) - (high - close)) / (high - low)` (0 when `high == low`)
@@ -129,9 +141,9 @@ Summary metrics are computed on rows where `signal == True` and forward metrics 
 The `TradeSimulator` converts directional signals into non-overlapping trades:
 
 - Entry: at signal bar close
-- Exit:
-  - Long stop: first full 1-min bar with `high < vma_10_5m`
-  - Short stop: first full 1-min bar with `low > vma_10_5m`
+- Exit policy:
+  - `vma_trailing` (default): long stop on first full 1-min bar with `high < vma_10_5m`, short stop on first full 1-min bar with `low > vma_10_5m`
+  - `fixed_rr`: bounded fixed stop / take-profit exits such as `stop_loss=1.0`, `reward_multiple=2.0`
   - Otherwise exit at end of session (`15:59` bar)
 
 Per-trade P&L:
@@ -162,6 +174,7 @@ Signal when all gates are true:
 - Regime from 5-min VWMA stack: bullish or bearish
 - Trigger on 1-min cross-and-reclaim of VMA
 - Time filter: default entry window `09:33` to `10:30` ET
+- Agent-safe parameter surface includes bounded VWMA stack choices with structural validation
 - Emits both `signal` and `signal_direction` (`long`/`short`)
 
 ### Elastic Band Reversion (`src/strategy/elastic_band_reversion.py`)

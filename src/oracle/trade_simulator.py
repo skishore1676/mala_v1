@@ -1,19 +1,18 @@
 """
 Trade Simulator for Market Impulse Strategy
 
-Walks bar-by-bar after each signal entry, checking exit conditions:
-  - Long stop:  full 1-min bar below 5-min VMA  (bar HIGH < VMA_5m)
-  - Short stop: full 1-min bar above 5-min VMA  (bar LOW > VMA_5m)
-  - Time stop:  exit at 16:00 ET close if neither triggered
+Walks bar-by-bar after each signal entry and delegates exit decisions
+to a pluggable exit policy.
 
 Produces trade-level P&L with win rate, profit factor, and expectancy.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import time as dt_time
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 import polars as pl
@@ -29,7 +28,7 @@ class Trade:
     direction: str      # "long" or "short"
     entry_price: float
     exit_price: float
-    exit_reason: str    # "vma_stop" or "eod"
+    exit_reason: str    # e.g. "vma_stop", "take_profit", "stop_loss", "eod"
     pnl: float = 0.0
     bars_held: int = 0
     vma_5m_at_entry: float = 0.0
@@ -37,6 +36,120 @@ class Trade:
     @property
     def is_winner(self) -> bool:
         return self.pnl > 0
+
+
+@dataclass(frozen=True, slots=True)
+class BarSnapshot:
+    """Minimal bar view passed into exit-policy checks."""
+
+    idx: int
+    timestamp: object
+    close: float
+    high: float
+    low: float
+    bar_time: dt_time
+    trade_date: object
+    values: dict[str, float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class OpenTrade:
+    """State captured at entry for exit-policy evaluation."""
+
+    entry_idx: int
+    entry_time: object
+    direction: str
+    entry_price: float
+    entry_date: object
+    entry_values: dict[str, float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class ExitDecision:
+    """Exit decision returned by a policy when a bar triggers an exit."""
+
+    reason: str
+    exit_price: float | None = None
+
+
+class ExitPolicy(ABC):
+    """Interface for bar-by-bar trade exits."""
+
+    policy_name: str
+
+    @property
+    def required_columns(self) -> set[str]:
+        return set()
+
+    def entry_is_valid(self, entry_bar: BarSnapshot, direction: str) -> bool:
+        return True
+
+    @abstractmethod
+    def should_exit(self, trade: OpenTrade, bar: BarSnapshot) -> ExitDecision | None:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class VmaTrailingExitPolicy(ExitPolicy):
+    """Replicates the legacy VMA trailing stop behavior."""
+
+    vma_col: str = "vma_10_5m"
+    policy_name: str = "vma_trailing"
+
+    @property
+    def required_columns(self) -> set[str]:
+        return {self.vma_col}
+
+    def entry_is_valid(self, entry_bar: BarSnapshot, direction: str) -> bool:
+        value = entry_bar.values.get(self.vma_col)
+        return value is not None and not np.isnan(value)
+
+    def should_exit(self, trade: OpenTrade, bar: BarSnapshot) -> ExitDecision | None:
+        vma_value = bar.values.get(self.vma_col)
+        if vma_value is None or np.isnan(vma_value):
+            return None
+
+        if trade.direction == "long" and bar.high < vma_value:
+            return ExitDecision(reason="vma_stop")
+        if trade.direction == "short" and bar.low > vma_value:
+            return ExitDecision(reason="vma_stop")
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class FixedRewardRiskExitPolicy(ExitPolicy):
+    """Exit at a fixed stop distance or fixed reward multiple from entry."""
+
+    stop_loss: float
+    reward_multiple: float = 2.0
+    policy_name: str = "fixed_rr"
+
+    def __post_init__(self) -> None:
+        if self.stop_loss <= 0:
+            raise ValueError("stop_loss must be positive for fixed_rr exits.")
+        if self.reward_multiple <= 0:
+            raise ValueError("reward_multiple must be positive for fixed_rr exits.")
+
+    def should_exit(self, trade: OpenTrade, bar: BarSnapshot) -> ExitDecision | None:
+        reward_distance = self.stop_loss * self.reward_multiple
+
+        if trade.direction == "long":
+            stop_price = trade.entry_price - self.stop_loss
+            target_price = trade.entry_price + reward_distance
+            # Conservative ordering when both thresholds are touched intra-bar.
+            if bar.low <= stop_price:
+                return ExitDecision(reason="stop_loss", exit_price=stop_price)
+            if bar.high >= target_price:
+                return ExitDecision(reason="take_profit", exit_price=target_price)
+            return None
+
+        stop_price = trade.entry_price + self.stop_loss
+        target_price = trade.entry_price - reward_distance
+        if bar.high >= stop_price:
+            return ExitDecision(reason="stop_loss", exit_price=stop_price)
+        if bar.low <= target_price:
+            return ExitDecision(reason="take_profit", exit_price=target_price)
+        return None
 
 
 @dataclass
@@ -113,21 +226,25 @@ class SimulationResult:
 
 class TradeSimulator:
     """
-    Bar-by-bar trade simulator with VMA-based exits.
+    Bar-by-bar trade simulator with pluggable exit policies.
 
-    Exit rules:
-      - Long: full 1-min bar HIGH < vma_10_5m → stopped out
-      - Short: full 1-min bar LOW > vma_10_5m → stopped out
-      - EOD: close position at market close (16:00 ET)
+    Defaults to the legacy VMA trailing-stop behavior, but can also run
+    fixed reward/risk or other explicit exit policies.
     """
 
     def __init__(
         self,
         vma_5m_col: str = "vma_10_5m",
         market_close: dt_time = dt_time(15, 59),
+        exit_policy: ExitPolicy | None = None,
     ) -> None:
-        self.vma_5m_col = vma_5m_col
         self.market_close = market_close
+        self.exit_policy = exit_policy or VmaTrailingExitPolicy(vma_col=vma_5m_col)
+        self.vma_5m_col = (
+            self.exit_policy.vma_col
+            if isinstance(self.exit_policy, VmaTrailingExitPolicy)
+            else vma_5m_col
+        )
 
     def simulate(self, df: pl.DataFrame) -> SimulationResult:
         """
@@ -136,7 +253,15 @@ class TradeSimulator:
 
         Returns a SimulationResult with all trades.
         """
-        required = {"timestamp", "close", "high", "low", "signal", "signal_direction", self.vma_5m_col}
+        required = {
+            "timestamp",
+            "close",
+            "high",
+            "low",
+            "signal",
+            "signal_direction",
+            *self.exit_policy.required_columns,
+        }
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"TradeSimulator requires columns: {missing}")
@@ -148,17 +273,36 @@ class TradeSimulator:
         low = df["low"].to_numpy()
         signal = df["signal"].to_list()
         direction = df["signal_direction"].to_list()
-        vma_5m = df[self.vma_5m_col].to_numpy()
-
         # Pre-compute bar times for EOD check
         bar_times = df.select(et_time_expr("timestamp").alias("t"))["t"].to_list()
 
         # Pre-compute dates for session boundary tracking
         dates = df.select(et_date_expr("timestamp").alias("d"))["d"].to_list()
+        policy_arrays = {
+            column: df[column].to_numpy()
+            for column in self.exit_policy.required_columns
+        }
 
         n = len(df)
         trades: List[Trade] = []
         i = 0
+
+        def bar_snapshot(idx: int) -> BarSnapshot:
+            return BarSnapshot(
+                idx=idx,
+                timestamp=timestamps[idx],
+                close=float(close[idx]),
+                high=float(high[idx]),
+                low=float(low[idx]),
+                bar_time=bar_times[idx],
+                trade_date=dates[idx],
+                values={
+                    column: float(policy_arrays[column][idx])
+                    if policy_arrays[column][idx] is not None
+                    else None
+                    for column in self.exit_policy.required_columns
+                },
+            )
 
         while i < n:
             # Look for signal entry
@@ -166,8 +310,8 @@ class TradeSimulator:
                 i += 1
                 continue
 
-            # Skip if VMA_5m is NaN at entry
-            if np.isnan(vma_5m[i]):
+            entry_bar = bar_snapshot(i)
+            if not self.exit_policy.entry_is_valid(entry_bar, str(direction[i])):
                 i += 1
                 continue
 
@@ -176,11 +320,19 @@ class TradeSimulator:
             entry_price = close[i]
             entry_direction = direction[i]
             entry_date = dates[i]
-            entry_vma_5m = vma_5m[i]
+            open_trade = OpenTrade(
+                entry_idx=entry_idx,
+                entry_time=entry_time,
+                direction=str(entry_direction),
+                entry_price=float(entry_price),
+                entry_date=entry_date,
+                entry_values=entry_bar.values,
+            )
 
             # Walk forward to find exit
             j = i + 1
             exit_reason = "eod"
+            exit_price_override: float | None = None
 
             while j < n:
                 # Session boundary — if we crossed into a new day, exit at last bar of entry day
@@ -194,28 +346,17 @@ class TradeSimulator:
                     exit_reason = "eod"
                     break
 
-                # Skip if VMA_5m is NaN
-                if np.isnan(vma_5m[j]):
-                    j += 1
-                    continue
-
-                # VMA stop check
-                if entry_direction == "long":
-                    # Full bar below 5-min VMA: bar HIGH < VMA_5m
-                    if high[j] < vma_5m[j]:
-                        exit_reason = "vma_stop"
-                        break
-                elif entry_direction == "short":
-                    # Full bar above 5-min VMA: bar LOW > VMA_5m
-                    if low[j] > vma_5m[j]:
-                        exit_reason = "vma_stop"
-                        break
+                decision = self.exit_policy.should_exit(open_trade, bar_snapshot(j))
+                if decision is not None:
+                    exit_reason = decision.reason
+                    exit_price_override = decision.exit_price
+                    break
 
                 j += 1
 
             # Clamp to valid index
             exit_idx = min(j, n - 1)
-            exit_price = close[exit_idx]
+            exit_price = exit_price_override if exit_price_override is not None else close[exit_idx]
             exit_time = timestamps[exit_idx]
             bars_held = exit_idx - entry_idx
 
@@ -234,7 +375,7 @@ class TradeSimulator:
                 exit_reason=exit_reason,
                 pnl=round(pnl, 4),
                 bars_held=bars_held,
-                vma_5m_at_entry=round(entry_vma_5m, 4),
+                vma_5m_at_entry=round(open_trade.entry_values.get(self.vma_5m_col) or 0.0, 4),
             ))
 
             # Move past the exit bar to avoid overlapping trades

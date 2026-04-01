@@ -38,6 +38,11 @@ class BaseStrategy(ABC):
         return set()
 
     @property
+    def feature_requests(self) -> set[str]:
+        """Additional Newton feature requests that are not final DataFrame columns."""
+        return set()
+
+    @property
     def parameter_space(self) -> dict[str, list[Any]]:
         """Optional bounded search space for orchestrators and agents."""
         return {}
@@ -64,6 +69,7 @@ def required_feature_union(strategies: Iterable[BaseStrategy]) -> set[str]:
     required: set[str] = set()
     for strategy in strategies:
         required |= set(strategy.required_features)
+        required |= set(strategy.feature_requests)
     return required
 
 

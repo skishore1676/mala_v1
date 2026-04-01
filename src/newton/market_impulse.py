@@ -18,9 +18,32 @@ Combined, these produce four market stages:
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import polars as pl
 from loguru import logger
+
+
+def validate_vwma_periods(vwma_periods: tuple[int, ...]) -> tuple[int, int, int]:
+    """Require a canonical short/medium/long VWMA stack."""
+    if len(vwma_periods) != 3:
+        raise ValueError(
+            "vwma_periods must contain exactly three periods in short/medium/long order."
+        )
+    normalized = tuple(int(period) for period in vwma_periods)
+    if any(period <= 0 for period in normalized):
+        raise ValueError("vwma_periods must be positive integers.")
+    if not (normalized[0] < normalized[1] < normalized[2]):
+        raise ValueError(
+            "vwma_periods must be strictly increasing, e.g. (8, 21, 34)."
+        )
+    return cast(tuple[int, int, int], normalized)
+
+
+def market_impulse_vwma_feature_spec(vwma_periods: tuple[int, ...]) -> str:
+    short, medium, long = validate_vwma_periods(vwma_periods)
+    return f"market_impulse_vwma_{short}_{medium}_{long}"
 
 
 # ── VMA (Variable Moving Average) ──────────────────────────────────────────
@@ -175,6 +198,7 @@ def enrich_impulse_columns(
       - impulse_regime{suffix}
       - impulse_stage{suffix}
     """
+    validated_periods = validate_vwma_periods(vwma_periods)
     close = df["close"].to_numpy().astype(np.float64)
     volume = df["volume"].to_numpy().astype(np.float64)
 
@@ -183,18 +207,22 @@ def enrich_impulse_columns(
 
     # VWMAs
     vwmas = {}
-    for p in vwma_periods:
+    for p in validated_periods:
         vwmas[p] = compute_vwma(close, volume, p)
 
     # Regime & stage
-    regime = classify_regime(vwmas[vwma_periods[0]], vwmas[vwma_periods[1]], vwmas[vwma_periods[2]])
+    regime = classify_regime(
+        vwmas[validated_periods[0]],
+        vwmas[validated_periods[1]],
+        vwmas[validated_periods[2]],
+    )
     stage = classify_stage(regime, close, vma)
 
     # Attach columns
     new_cols = [
         pl.Series(f"vma_{vma_length}{suffix}", vma),
     ]
-    for p in vwma_periods:
+    for p in validated_periods:
         new_cols.append(pl.Series(f"vwma_{p}{suffix}", vwmas[p]))
     new_cols.append(pl.Series(f"impulse_regime{suffix}", regime))
     new_cols.append(pl.Series(f"impulse_stage{suffix}", stage))

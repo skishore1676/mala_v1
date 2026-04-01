@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.research.models import StrategyCatalogEntry, StrategyStatus, ValidationStrategy
 from src.research.state import load_research_state
-from src.strategy.base import BaseStrategy
+from src.strategy.base import BaseStrategy, required_feature_union
 from src.strategy.factory import build_strategy
 
 
@@ -57,7 +57,7 @@ class ResearchRegistry:
             tickers=list(tracked.tickers),
             directions=list(tracked.directions),
             evaluation_mode=strategy.evaluation_mode,
-            required_features=sorted(strategy.required_features),
+            required_features=sorted(required_feature_union([strategy])),
             parameter_space={key: list(values) for key, values in strategy.parameter_space.items()},
             strategy_config=strategy.strategy_config(),
             notes=tracked.notes,

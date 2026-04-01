@@ -13,6 +13,7 @@ from typing import Any
 import polars as pl
 from loguru import logger
 
+from src.newton.transforms import jerk_column_name, validate_periods_back, velocity_column_name
 from src.strategy.base import BaseStrategy
 
 
@@ -24,10 +25,12 @@ class ElasticBandReversionStrategy(BaseStrategy):
         z_score_threshold: float = 2.0,
         z_score_window: int = 240,
         use_directional_mass: bool = True,
+        kinematic_periods_back: int = 1,
     ) -> None:
         self.z_score_threshold = z_score_threshold
         self.z_score_window = z_score_window
         self.use_directional_mass = use_directional_mass
+        self.kinematic_periods_back = validate_periods_back(kinematic_periods_back)
 
     @property
     def name(self) -> str:
@@ -36,7 +39,12 @@ class ElasticBandReversionStrategy(BaseStrategy):
 
     @property
     def required_features(self) -> set[str]:
-        required = {"close", "vpoc_4h", "velocity_1m", "jerk_1m"}
+        required = {
+            "close",
+            "vpoc_4h",
+            velocity_column_name(self.kinematic_periods_back),
+            jerk_column_name(self.kinematic_periods_back),
+        }
         if self.use_directional_mass:
             required.add("directional_mass")
         return required
@@ -46,6 +54,7 @@ class ElasticBandReversionStrategy(BaseStrategy):
         return {
             "z_score_threshold": [1.0, 1.25, 1.75, 2.0, 2.5, 3.0],
             "z_score_window": [120, 240, 360],
+            "kinematic_periods_back": [1, 3, 5],
             "use_directional_mass": [True, False],
         }
 
@@ -57,6 +66,7 @@ class ElasticBandReversionStrategy(BaseStrategy):
         return {
             "z_score_threshold": self.z_score_threshold,
             "z_score_window": self.z_score_window,
+            "kinematic_periods_back": self.kinematic_periods_back,
             "use_directional_mass": self.use_directional_mass,
         }
 
@@ -65,6 +75,8 @@ class ElasticBandReversionStrategy(BaseStrategy):
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
+        velocity_col = velocity_column_name(self.kinematic_periods_back)
+        jerk_col = jerk_column_name(self.kinematic_periods_back)
 
         df = df.with_columns([
             ((pl.col("close") - pl.col("vpoc_4h")) / pl.col("vpoc_4h")).alias("_dist_pct"),
@@ -84,15 +96,15 @@ class ElasticBandReversionStrategy(BaseStrategy):
 
         long_signal = (
             (pl.col("_z_score") <= -self.z_score_threshold)
-            & (pl.col("velocity_1m") < 0)
-            & (pl.col("jerk_1m") > 0)
+            & (pl.col(velocity_col) < 0)
+            & (pl.col(jerk_col) > 0)
             & (pl.col("directional_mass") > 0 if self.use_directional_mass else pl.lit(True))
         )
 
         short_signal = (
             (pl.col("_z_score") >= self.z_score_threshold)
-            & (pl.col("velocity_1m") > 0)
-            & (pl.col("jerk_1m") < 0)
+            & (pl.col(velocity_col) > 0)
+            & (pl.col(jerk_col) < 0)
             & (pl.col("directional_mass") < 0 if self.use_directional_mass else pl.lit(True))
         )
 
@@ -112,12 +124,13 @@ class ElasticBandReversionStrategy(BaseStrategy):
 
         logger.info(
             "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
-            "[dm={}]",
+            "[dm={}, kinematic_periods_back={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
             self.use_directional_mass,
+            self.kinematic_periods_back,
         )
         return df

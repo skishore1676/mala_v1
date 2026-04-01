@@ -15,6 +15,12 @@ import polars as pl
 from loguru import logger
 
 from src.config import settings
+from src.newton.transforms import (
+    acceleration_column_name,
+    jerk_column_name,
+    validate_periods_back,
+    velocity_column_name,
+)
 from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_time_expr
 
@@ -32,6 +38,7 @@ class KinematicLadderStrategy(BaseStrategy):
         use_volume_filter: bool = True,
         session_start: time | str = time(9, 35),
         session_end: time | str = time(15, 30),
+        kinematic_periods_back: int = 1,
     ) -> None:
         self.regime_window = regime_window
         self.accel_window = accel_window
@@ -41,6 +48,7 @@ class KinematicLadderStrategy(BaseStrategy):
         self.use_volume_filter = use_volume_filter
         self.session_start = coerce_time(session_start)
         self.session_end = coerce_time(session_end)
+        self.kinematic_periods_back = validate_periods_back(kinematic_periods_back)
 
     @property
     def name(self) -> str:
@@ -55,9 +63,9 @@ class KinematicLadderStrategy(BaseStrategy):
             "ema_4",
             "ema_8",
             "ema_12",
-            "velocity_1m",
-            "accel_1m",
-            "jerk_1m",
+            velocity_column_name(self.kinematic_periods_back),
+            acceleration_column_name(self.kinematic_periods_back),
+            jerk_column_name(self.kinematic_periods_back),
             "volume",
             f"volume_ma_{self.volume_ma_period}",
         }
@@ -67,6 +75,7 @@ class KinematicLadderStrategy(BaseStrategy):
         return {
             "regime_window": [20, 30, 45],
             "accel_window": [8, 12, 20],
+            "kinematic_periods_back": [1, 3, 5],
             "use_volume_filter": [True, False],
             "volume_multiplier": [1.0, 1.05, 1.1, 1.2],
         }
@@ -83,6 +92,7 @@ class KinematicLadderStrategy(BaseStrategy):
             "volume_multiplier": self.volume_multiplier,
             "use_time_filter": self.use_time_filter,
             "use_volume_filter": self.use_volume_filter,
+            "kinematic_periods_back": self.kinematic_periods_back,
             "session_start": self.session_start.isoformat(timespec="minutes"),
             "session_end": self.session_end.isoformat(timespec="minutes"),
         }
@@ -102,12 +112,15 @@ class KinematicLadderStrategy(BaseStrategy):
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
 
         vol_ma_col = f"volume_ma_{self.volume_ma_period}"
+        velocity_col = velocity_column_name(self.kinematic_periods_back)
+        accel_col = acceleration_column_name(self.kinematic_periods_back)
+        jerk_col = jerk_column_name(self.kinematic_periods_back)
 
         df = df.with_columns([
-            pl.col("velocity_1m")
+            pl.col(velocity_col)
             .rolling_mean(window_size=self.regime_window)
             .alias("_vel_regime"),
-            pl.col("accel_1m")
+            pl.col(accel_col)
             .rolling_mean(window_size=self.accel_window)
             .alias("_acc_regime"),
         ])
@@ -136,8 +149,8 @@ class KinematicLadderStrategy(BaseStrategy):
             & (pl.col("close") <= pl.col("ema_12"))
         )
 
-        trigger_long = (pl.col("velocity_1m") > 0) & (pl.col("jerk_1m") > 0)
-        trigger_short = (pl.col("velocity_1m") < 0) & (pl.col("jerk_1m") < 0)
+        trigger_long = (pl.col(velocity_col) > 0) & (pl.col(jerk_col) > 0)
+        trigger_short = (pl.col(velocity_col) < 0) & (pl.col(jerk_col) < 0)
 
         volume_gate = (
             pl.col("volume") > self.volume_multiplier * pl.col(vol_ma_col)
@@ -172,12 +185,13 @@ class KinematicLadderStrategy(BaseStrategy):
 
         logger.info(
             "Strategy '{}' generated {} signals ({} long, {} short) out of {} bars "
-            "[vol_filter={}]",
+            "[vol_filter={}, kinematic_periods_back={}]",
             self.name,
             total,
             longs,
             shorts,
             len(df),
             self.use_volume_filter,
+            self.kinematic_periods_back,
         )
         return df

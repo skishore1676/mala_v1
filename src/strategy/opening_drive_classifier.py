@@ -14,6 +14,11 @@ from typing import Any
 import polars as pl
 from loguru import logger
 
+from src.newton.transforms import (
+    acceleration_column_name,
+    jerk_column_name,
+    validate_periods_back,
+)
 from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_date_expr, et_time_expr
 
@@ -41,6 +46,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         allow_short: bool = True,
         enable_continue: bool = True,
         enable_fail: bool = True,
+        kinematic_periods_back: int = 1,
         strategy_label: str | None = None,
     ) -> None:
         self.market_open = coerce_time(market_open)
@@ -55,6 +61,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         self.allow_short = allow_short
         self.enable_continue = enable_continue
         self.enable_fail = enable_fail
+        self.kinematic_periods_back = validate_periods_back(kinematic_periods_back)
         self.strategy_label = strategy_label
 
     @property
@@ -70,8 +77,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "low",
             "close",
             "volume",
-            "accel_1m",
-            "jerk_1m",
+            acceleration_column_name(self.kinematic_periods_back),
+            jerk_column_name(self.kinematic_periods_back),
         }
         if self.require_directional_mass:
             required.add("directional_mass")
@@ -85,6 +92,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "entry_end_offset_minutes": [90, 120],
             "min_drive_return_pct": [0.0015, 0.0020],
             "breakout_buffer_pct": [0.0, 0.0005],
+            "kinematic_periods_back": [1, 3],
             "volume_multiplier": [1.2, 1.4],
         }
 
@@ -106,6 +114,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "allow_short": self.allow_short,
             "enable_continue": self.enable_continue,
             "enable_fail": self.enable_fail,
+            "kinematic_periods_back": self.kinematic_periods_back,
             "strategy_label": self.strategy_label,
         }
 
@@ -114,6 +123,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Strategy '{self.name}' requires columns: {missing}")
+        accel_col = acceleration_column_name(self.kinematic_periods_back)
+        jerk_col = jerk_column_name(self.kinematic_periods_back)
 
         opening_end = _time_plus_minutes(self.market_open, self.opening_window_minutes)
         entry_start = _time_plus_minutes(self.market_open, self.entry_start_offset_minutes)
@@ -184,8 +195,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             in_entry_window
             & (pl.col("_drive_direction") == "up")
             & (pl.col("close") >= pl.col("_opening_high") * (1.0 + self.breakout_buffer_pct))
-            & (pl.col("accel_1m") > 0)
-            & (pl.col("jerk_1m") > 0)
+            & (pl.col(accel_col) > 0)
+            & (pl.col(jerk_col) > 0)
             & volume_gate
             & long_mass_gate
         )
@@ -193,8 +204,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             in_entry_window
             & (pl.col("_drive_direction") == "down")
             & (pl.col("close") <= pl.col("_opening_low") * (1.0 - self.breakout_buffer_pct))
-            & (pl.col("accel_1m") < 0)
-            & (pl.col("jerk_1m") < 0)
+            & (pl.col(accel_col) < 0)
+            & (pl.col(jerk_col) < 0)
             & volume_gate
             & short_mass_gate
         )
@@ -202,8 +213,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             in_entry_window
             & (pl.col("_drive_direction") == "down")
             & (pl.col("close") > pl.col("_opening_mid"))
-            & (pl.col("accel_1m") > 0)
-            & (pl.col("jerk_1m") > 0)
+            & (pl.col(accel_col) > 0)
+            & (pl.col(jerk_col) > 0)
             & volume_gate
             & long_mass_gate
         )
@@ -211,8 +222,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             in_entry_window
             & (pl.col("_drive_direction") == "up")
             & (pl.col("close") < pl.col("_opening_mid"))
-            & (pl.col("accel_1m") < 0)
-            & (pl.col("jerk_1m") < 0)
+            & (pl.col(accel_col) < 0)
+            & (pl.col(jerk_col) < 0)
             & volume_gate
             & short_mass_gate
         )

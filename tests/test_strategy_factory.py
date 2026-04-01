@@ -68,6 +68,7 @@ def test_market_impulse_strategy_config_uses_canonical_fields() -> None:
         "market_open_minute": 30,
         "vma_length": 12,
         "regime_timeframe": "30m",
+        "vwma_periods": [8, 21, 34],
     }
 
 
@@ -84,6 +85,29 @@ def test_market_impulse_accepts_legacy_internal_field_names() -> None:
     assert strategy.strategy_config()["regime_timeframe"] == "1h"
 
 
+def test_market_impulse_accepts_valid_vwma_period_surface() -> None:
+    strategy = build_strategy(
+        "Market Impulse (Cross & Reclaim)",
+        {"vwma_periods": (5, 13, 21)},
+    )
+
+    assert isinstance(strategy, MarketImpulseStrategy)
+    assert strategy.vwma_periods == (5, 13, 21)
+    assert "market_impulse_vwma_5_13_21" in strategy.feature_requests
+
+
+def test_market_impulse_rejects_invalid_vwma_period_surface() -> None:
+    try:
+        build_strategy(
+            "Market Impulse (Cross & Reclaim)",
+            {"vwma_periods": (21, 13, 5)},
+        )
+    except ValueError as exc:
+        assert "strictly increasing" in str(exc)
+    else:
+        raise AssertionError("Expected invalid vwma_periods to raise ValueError")
+
+
 def test_required_feature_union_combines_strategy_dependencies() -> None:
     strategies = [
         build_strategy("Elastic Band Reversion"),
@@ -95,6 +119,14 @@ def test_required_feature_union_combines_strategy_dependencies() -> None:
     assert "vpoc_4h" in features
     assert "velocity_1m" in features
     assert "timestamp" in features
+
+
+def test_jerk_pivot_can_expose_multi_bar_kinematics_to_agents() -> None:
+    strategy = JerkPivotMomentumStrategy(kinematic_periods_back=3)
+
+    assert "velocity_3" in strategy.required_features
+    assert "accel_3" in strategy.required_features
+    assert "jerk_3" in strategy.required_features
 
 
 def test_jerk_pivot_strategy_accepts_serialized_time_config() -> None:

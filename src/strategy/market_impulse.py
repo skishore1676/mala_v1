@@ -27,6 +27,10 @@ from typing import Any, Optional
 import polars as pl
 from loguru import logger
 
+from src.newton.market_impulse import (
+    market_impulse_vwma_feature_spec,
+    validate_vwma_periods,
+)
 from src.strategy.base import BaseStrategy
 from src.time_utils import et_time_expr
 
@@ -44,11 +48,13 @@ class MarketImpulseStrategy(BaseStrategy):
         regime_timeframe: str = "5m",
         regime_col: str | None = None,
         vma_length: int | None = None,
+        vwma_periods: tuple[int, ...] = (8, 21, 34),
     ) -> None:
         self.entry_buffer_minutes = entry_buffer_minutes
         self.entry_window_minutes = entry_window_minutes
         self.market_open = time(market_open_hour, market_open_minute)
         self.vma_length = _resolve_vma_length(vma_length=vma_length, vma_col=vma_col)
+        self.vwma_periods = validate_vwma_periods(tuple(vwma_periods))
         self.vma_col = vma_col or f"vma_{self.vma_length}"
         self.regime_timeframe = _resolve_regime_timeframe(
             regime_timeframe=regime_timeframe,
@@ -77,11 +83,16 @@ class MarketImpulseStrategy(BaseStrategy):
         }
 
     @property
+    def feature_requests(self) -> set[str]:
+        return {market_impulse_vwma_feature_spec(self.vwma_periods)}
+
+    @property
     def parameter_space(self) -> dict[str, list[Any]]:
         return {
             "entry_buffer_minutes": [3, 5],
             "entry_window_minutes": [45, 60, 90],
             "regime_timeframe": ["5m", "15m", "30m", "1h"],
+            "vwma_periods": [(5, 13, 21), (8, 21, 34), (10, 20, 40)],
         }
 
     @property
@@ -96,6 +107,7 @@ class MarketImpulseStrategy(BaseStrategy):
             "market_open_minute": self.market_open.minute,
             "vma_length": self.vma_length,
             "regime_timeframe": self.regime_timeframe,
+            "vwma_periods": list(self.vwma_periods),
         }
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
