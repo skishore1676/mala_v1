@@ -16,20 +16,38 @@ from src.strategy.base import BaseStrategy, required_feature_union
 from src.strategy.factory import build_strategy
 
 
+DEFAULT_AGENT_CATALOG: tuple[str, ...] = (
+    "Elastic Band Reversion",
+    "Jerk-Pivot Momentum (tight)",
+    "Opening Drive Classifier",
+    "Market Impulse (Cross & Reclaim)",
+)
+
+
 class ResearchRegistry:
     """Bridge repo memory to runtime strategy instances."""
 
     def __init__(self, state_path: Path | None = None) -> None:
         self.state = load_research_state(state_path)
 
-    def tracked_names(self) -> list[str]:
-        return sorted(self.state.strategies)
+    def tracked_names(self, *, include_lineage: bool = False) -> list[str]:
+        if include_lineage:
+            return sorted(self.state.strategies)
+        return [
+            name for name in DEFAULT_AGENT_CATALOG
+            if name in self.state.strategies
+        ]
 
     def validation_set(self) -> list[ValidationStrategy]:
         return list(self.state.validation)
 
-    def tracked_entries(self, include_dead: bool = False) -> list[StrategyCatalogEntry]:
-        names = self.tracked_names()
+    def tracked_entries(
+        self,
+        include_dead: bool = False,
+        *,
+        include_lineage: bool = False,
+    ) -> list[StrategyCatalogEntry]:
+        names = self.tracked_names(include_lineage=include_lineage)
         entries = [self.catalog_entry(name) for name in names]
         if include_dead:
             return entries
@@ -42,8 +60,13 @@ class ResearchRegistry:
             merged_params.update(params)
         return build_strategy(strategy_name, merged_params or None)
 
-    def build_tracked_strategies(self, include_dead: bool = False) -> list[BaseStrategy]:
-        names = self.tracked_names()
+    def build_tracked_strategies(
+        self,
+        include_dead: bool = False,
+        *,
+        include_lineage: bool = False,
+    ) -> list[BaseStrategy]:
+        names = self.tracked_names(include_lineage=include_lineage)
         if not include_dead:
             names = [
                 name for name in names

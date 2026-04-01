@@ -180,8 +180,9 @@ Signal when all gates are true:
 ### Elastic Band Reversion (`src/strategy/elastic_band_reversion.py`)
 
 - Uses dynamic stretch via rolling z-score of VPOC distance (instead of fixed % stretch).
-- Long/short still require velocity+jerk exhaustion flip.
-- Participation gate uses directional mass polarity:
+- Velocity exhaustion remains mandatory.
+- Jerk confirmation is now an explicit optional ablation.
+- Directional-mass participation is also an explicit optional ablation:
   - Long requires `directional_mass > 0`
   - Short requires `directional_mass < 0`
 
@@ -194,10 +195,12 @@ Signal when all gates are true:
 ### Opening Drive Classifier (`src/strategy/opening_drive_classifier.py`)
 
 - Classifies opening impulse using first 25 minutes after `09:30` ET.
+- Entry phase begins strictly after the opening window in the canonical surface.
 - If opening drive is strong up/down:
   - `continue` mode: trade range expansion in drive direction.
   - `fail` mode: trade reclaim through opening midpoint against initial drive.
-- Uses acceleration, jerk, volume-vs-opening-baseline, and directional mass for participation confirmation.
+- Acceleration confirmation remains mandatory.
+- Jerk, volume-vs-opening-baseline, and directional-mass confirmations are explicit optional ablations.
 
 Variant now supported:
 - **Opening Drive v2 (Short Continue)**: short-only, continuation-only, stricter drive/volume filters.
@@ -235,7 +238,19 @@ The refactor is not considered successful unless the strategies below can still 
 - `Elastic Band Reversion`: primary regression baseline and strongest current research candidate.
 - `Opening Drive Classifier`: validates session-aware logic, opening-window rules, and directional output.
 - `Kinematic Ladder`: validates the momentum/regime path and ensures weaker candidates still move correctly through the workflow.
-- `Jerk-Pivot Momentum`: validates an alternate directional feature dependency built around VPOC proximity and jerk inflection.
+- `Jerk-Pivot Momentum (tight)`: validates an alternate directional feature dependency built around VPOC proximity and jerk inflection.
+- `Market Impulse (Cross & Reclaim)`: validates the reusable multi-timeframe regime and entry path.
+
+## Default Agent Catalog
+
+The default agent-facing research loop is intentionally narrower than the full strategy namespace to reduce multiple-testing pressure.
+
+- Core default catalog:
+  - `Elastic Band Reversion`
+  - `Jerk-Pivot Momentum (tight)`
+  - `Opening Drive Classifier`
+  - `Market Impulse (Cross & Reclaim)`
+- Lineage strategies such as `Kinematic Ladder`, `Compression Expansion Breakout`, and `Regime Router (Kinematic + Compression)` remain buildable by explicit name for provenance, replay, and tests, but are excluded from default discovery/orchestrator exploration.
 
 Minimum acceptance for the validation set:
 

@@ -305,7 +305,7 @@ class StrategySearchSpec:
             values = [normalized.get(name) for name in ordering.parameters]
             if any(value is None for value in values):
                 continue
-            pairs = zip(values, values[1:], strict=True)
+            pairs = zip(values, values[1:])
             if ordering.direction == "strictly_ascending":
                 valid = all(left < right for left, right in pairs)
                 relation = "<"

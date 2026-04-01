@@ -41,6 +41,31 @@ class TestElasticBandReversionStrategy:
         with pytest.raises(ValueError, match="requires columns"):
             strat.generate_signals(pl.DataFrame({"close": [100.0]}))
 
+    def test_jerk_confirmation_can_be_disabled_without_removing_velocity_gate(self) -> None:
+        df = pl.DataFrame({
+            "close": [100.0, 100.1, 99.9, 98.0],
+            "vpoc_4h": [100.0, 100.0, 100.0, 100.0],
+            "velocity_1m": [0.0, -0.1, -0.2, -0.3],
+            "jerk_1m": [0.0, -0.1, -0.1, -0.1],
+            "directional_mass": [0.0, 5.0, 10.0, 500.0],
+        })
+
+        with_jerk = ElasticBandReversionStrategy(
+            z_score_threshold=1.0,
+            z_score_window=3,
+            use_jerk_confirmation=True,
+        ).generate_signals(df)
+        without_jerk = ElasticBandReversionStrategy(
+            z_score_threshold=1.0,
+            z_score_window=3,
+            use_jerk_confirmation=False,
+        ).generate_signals(df)
+
+        assert with_jerk.filter(pl.col("signal")).is_empty()
+        jerkless_signals = without_jerk.filter(pl.col("signal"))
+        assert jerkless_signals.height > 0
+        assert set(jerkless_signals["signal_direction"].to_list()) == {"long"}
+
 
 class TestKinematicLadderStrategy:
     def test_generates_long_signal(self) -> None:
@@ -200,7 +225,7 @@ class TestOpeningDriveClassifierStrategy:
         df = self._build_two_day_df()
         strat = OpeningDriveClassifierStrategy(
             opening_window_minutes=25,
-            entry_start_offset_minutes=25,
+            entry_start_offset_minutes=30,
             entry_end_offset_minutes=120,
             min_drive_return_pct=0.001,
             volume_multiplier=1.2,
@@ -221,7 +246,7 @@ class TestOpeningDriveClassifierStrategy:
         df = self._build_two_day_df()
         strat = OpeningDriveClassifierStrategy(
             opening_window_minutes=25,
-            entry_start_offset_minutes=25,
+            entry_start_offset_minutes=30,
             entry_end_offset_minutes=120,
             min_drive_return_pct=0.001,
             volume_multiplier=1.2,
@@ -233,3 +258,99 @@ class TestOpeningDriveClassifierStrategy:
         )
         out = strat.generate_signals(df)
         assert out.filter(pl.col("signal")).is_empty()
+
+    def _build_single_day_continue_candidate(
+        self,
+        *,
+        trigger_volume: int = 3200,
+        trigger_jerk: float = 0.6,
+        trigger_directional_mass: float = 450.0,
+    ) -> pl.DataFrame:
+        rows: list[dict] = []
+        day_start = datetime(2025, 1, 2, 14, 30)  # 09:30 ET in UTC
+        for i in range(60):
+            ts = day_start + timedelta(minutes=i)
+            close = 100.0 + (0.04 * i if i < 25 else 1.0)
+            if i == 30:
+                close = 101.3
+            rows.append({
+                "timestamp": ts,
+                "open": close - 0.01,
+                "high": close + 0.02,
+                "low": close - 0.02,
+                "close": close,
+                "volume": trigger_volume if i == 30 else 1000,
+                "accel_1m": 0.8 if i == 30 else 0.0,
+                "jerk_1m": trigger_jerk if i == 30 else 0.0,
+                "directional_mass": trigger_directional_mass if i == 30 else 10.0,
+            })
+        return pl.DataFrame(rows)
+
+    def test_jerk_confirmation_can_be_disabled(self) -> None:
+        df = self._build_single_day_continue_candidate(trigger_jerk=-0.2)
+
+        with_jerk = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_jerk_confirmation=True,
+        ).generate_signals(df)
+        without_jerk = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_jerk_confirmation=False,
+        ).generate_signals(df)
+
+        assert with_jerk.filter(pl.col("signal")).is_empty()
+        assert without_jerk.filter(pl.col("signal")).height == 1
+
+    def test_volume_confirmation_can_be_disabled(self) -> None:
+        df = self._build_single_day_continue_candidate(trigger_volume=1000)
+
+        with_volume = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_volume_filter=True,
+        ).generate_signals(df)
+        without_volume = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_volume_filter=False,
+        ).generate_signals(df)
+
+        assert with_volume.filter(pl.col("signal")).is_empty()
+        assert without_volume.filter(pl.col("signal")).height == 1
+
+    def test_directional_mass_confirmation_can_be_disabled(self) -> None:
+        df = self._build_single_day_continue_candidate(trigger_directional_mass=-50.0)
+
+        with_mass = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_directional_mass=True,
+        ).generate_signals(df)
+        without_mass = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_directional_mass=False,
+        ).generate_signals(df)
+
+        assert with_mass.filter(pl.col("signal")).is_empty()
+        assert without_mass.filter(pl.col("signal")).height == 1

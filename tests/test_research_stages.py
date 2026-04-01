@@ -459,7 +459,7 @@ def test_run_late_stage_helpers_with_real_strategy() -> None:
             accel.append(-0.1)
             jerk.append(-0.1)
             directional_mass.append(-5.0)
-        elif idx == 25:
+        elif idx == 30:
             price = 9.65
             close.append(price)
             high.append(price + 0.01)
@@ -469,7 +469,7 @@ def test_run_late_stage_helpers_with_real_strategy() -> None:
             jerk.append(-0.2)
             directional_mass.append(-10.0)
         else:
-            price = 9.6 - ((idx - 25) * 0.01)
+            price = 9.7 - ((idx - 25) * 0.01)
             close.append(price)
             high.append(price + 0.01)
             low.append(price - 0.02)

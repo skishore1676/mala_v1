@@ -61,7 +61,7 @@ def _build_router(params: dict[str, Any] | None = None) -> BaseStrategy:
 def _build_opening_drive(params: dict[str, Any] | None = None) -> BaseStrategy:
     defaults = {
         "opening_window_minutes": 25,
-        "entry_start_offset_minutes": 25,
+        "entry_start_offset_minutes": 30,
         "entry_end_offset_minutes": 120,
         "min_drive_return_pct": 0.0015,
         "volume_multiplier": 1.2,
@@ -72,7 +72,7 @@ def _build_opening_drive(params: dict[str, Any] | None = None) -> BaseStrategy:
 def _build_opening_drive_v2(params: dict[str, Any] | None = None) -> BaseStrategy:
     defaults = {
         "opening_window_minutes": 25,
-        "entry_start_offset_minutes": 25,
+        "entry_start_offset_minutes": 30,
         "entry_end_offset_minutes": 120,
         "min_drive_return_pct": 0.0020,
         "breakout_buffer_pct": 0.0005,

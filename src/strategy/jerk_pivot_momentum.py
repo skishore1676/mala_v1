@@ -141,7 +141,7 @@ class JerkPivotMomentumStrategy(BaseStrategy):
                     type="discrete",
                     domain=DomainSpec(values=[1, 3, 5]),
                     default=self.kinematic_periods_back,
-                    prior_center=1,
+                    prior_center=3,
                 ),
                 ParameterSpec(
                     name="use_volume_filter",

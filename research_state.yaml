@@ -161,7 +161,7 @@ strategies:
     directions: [short]
     optimal_params:
       opening_window_minutes: 25
-      entry_start_offset_minutes: 25
+      entry_start_offset_minutes: 30
       entry_end_offset_minutes: 120
       min_drive_return_pct: 0.0015
       volume_multiplier: 1.2

@@ -19,6 +19,15 @@ from src.newton.transforms import (
     jerk_column_name,
     validate_periods_back,
 )
+from src.research.models import (
+    ConstraintSpec,
+    DomainSpec,
+    GatingCondition,
+    MonotonicOrdering,
+    ObjectiveSpec,
+    ParameterSpec,
+    StrategySearchSpec,
+)
 from src.strategy.base import BaseStrategy, coerce_time
 from src.time_utils import et_date_expr, et_time_expr
 
@@ -40,14 +49,17 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         entry_end_offset_minutes: int = 120,
         min_drive_return_pct: float = 0.0015,
         breakout_buffer_pct: float = 0.0,
+        use_volume_filter: bool = True,
         volume_multiplier: float = 1.2,
-        require_directional_mass: bool = True,
+        use_directional_mass: bool = True,
+        use_jerk_confirmation: bool = True,
         allow_long: bool = True,
         allow_short: bool = True,
         enable_continue: bool = True,
         enable_fail: bool = True,
         kinematic_periods_back: int = 1,
         strategy_label: str | None = None,
+        require_directional_mass: bool | None = None,
     ) -> None:
         self.market_open = coerce_time(market_open)
         self.opening_window_minutes = opening_window_minutes
@@ -55,8 +67,14 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         self.entry_end_offset_minutes = entry_end_offset_minutes
         self.min_drive_return_pct = min_drive_return_pct
         self.breakout_buffer_pct = breakout_buffer_pct
+        self.use_volume_filter = use_volume_filter
         self.volume_multiplier = volume_multiplier
-        self.require_directional_mass = require_directional_mass
+        self.use_directional_mass = (
+            require_directional_mass
+            if require_directional_mass is not None
+            else use_directional_mass
+        )
+        self.use_jerk_confirmation = use_jerk_confirmation
         self.allow_long = allow_long
         self.allow_short = allow_short
         self.enable_continue = enable_continue
@@ -76,11 +94,13 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "high",
             "low",
             "close",
-            "volume",
             acceleration_column_name(self.kinematic_periods_back),
-            jerk_column_name(self.kinematic_periods_back),
         }
-        if self.require_directional_mass:
+        if self.use_volume_filter:
+            required.add("volume")
+        if self.use_jerk_confirmation:
+            required.add(jerk_column_name(self.kinematic_periods_back))
+        if self.use_directional_mass:
             required.add("directional_mass")
         return required
 
@@ -93,12 +113,115 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "min_drive_return_pct": [0.0015, 0.0020],
             "breakout_buffer_pct": [0.0, 0.0005],
             "kinematic_periods_back": [1, 3],
+            "use_volume_filter": [True, False],
             "volume_multiplier": [1.2, 1.4],
+            "use_directional_mass": [True, False],
+            "use_jerk_confirmation": [True, False],
         }
 
     @property
     def evaluation_mode(self) -> str:
         return "directional"
+
+    @property
+    def search_spec(self) -> StrategySearchSpec:
+        return StrategySearchSpec(
+            parameters=[
+                ParameterSpec(
+                    name="opening_window_minutes",
+                    type="discrete",
+                    domain=DomainSpec(values=[20, 25, 30]),
+                    default=self.opening_window_minutes,
+                    prior_center=25,
+                ),
+                ParameterSpec(
+                    name="entry_start_offset_minutes",
+                    type="discrete",
+                    domain=DomainSpec(values=[20, 25, 30]),
+                    default=self.entry_start_offset_minutes,
+                    prior_center=30,
+                ),
+                ParameterSpec(
+                    name="entry_end_offset_minutes",
+                    type="discrete",
+                    domain=DomainSpec(values=[90, 120]),
+                    default=self.entry_end_offset_minutes,
+                    prior_center=120,
+                ),
+                ParameterSpec(
+                    name="min_drive_return_pct",
+                    type="discrete",
+                    domain=DomainSpec(values=[0.0015, 0.0020]),
+                    default=self.min_drive_return_pct,
+                    prior_center=0.0015,
+                ),
+                ParameterSpec(
+                    name="breakout_buffer_pct",
+                    type="discrete",
+                    domain=DomainSpec(values=[0.0, 0.0005]),
+                    default=self.breakout_buffer_pct,
+                    prior_center=0.0,
+                ),
+                ParameterSpec(
+                    name="kinematic_periods_back",
+                    type="discrete",
+                    domain=DomainSpec(values=[1, 3]),
+                    default=self.kinematic_periods_back,
+                    prior_center=3,
+                ),
+                ParameterSpec(
+                    name="use_volume_filter",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=self.use_volume_filter,
+                    prior_center=True,
+                ),
+                ParameterSpec(
+                    name="volume_multiplier",
+                    type="discrete",
+                    domain=DomainSpec(values=[1.2, 1.4]),
+                    default=self.volume_multiplier,
+                    prior_center=1.2,
+                ),
+                ParameterSpec(
+                    name="use_directional_mass",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=self.use_directional_mass,
+                    prior_center=True,
+                ),
+                ParameterSpec(
+                    name="use_jerk_confirmation",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=self.use_jerk_confirmation,
+                    prior_center=True,
+                ),
+            ],
+            constraints=ConstraintSpec(
+                gating_conditions=[
+                    GatingCondition(
+                        parameter="volume_multiplier",
+                        requires={"use_volume_filter": True},
+                    )
+                ],
+                monotonic_ordering=[
+                    MonotonicOrdering(
+                        parameters=[
+                            "opening_window_minutes",
+                            "entry_start_offset_minutes",
+                            "entry_end_offset_minutes",
+                        ],
+                        direction="strictly_ascending",
+                    )
+                ],
+            ),
+            objective=ObjectiveSpec(
+                primary_metric="avg_test_exp_r",
+                minimum_signals=20,
+                tie_breakers=["pct_positive_oos_windows", "oos_signals"],
+            ),
+        )
 
     def strategy_config(self) -> dict[str, Any]:
         return {
@@ -108,8 +231,10 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "entry_end_offset_minutes": self.entry_end_offset_minutes,
             "min_drive_return_pct": self.min_drive_return_pct,
             "breakout_buffer_pct": self.breakout_buffer_pct,
+            "use_volume_filter": self.use_volume_filter,
             "volume_multiplier": self.volume_multiplier,
-            "require_directional_mass": self.require_directional_mass,
+            "use_directional_mass": self.use_directional_mass,
+            "use_jerk_confirmation": self.use_jerk_confirmation,
             "allow_long": self.allow_long,
             "allow_short": self.allow_short,
             "enable_continue": self.enable_continue,
@@ -117,6 +242,12 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "kinematic_periods_back": self.kinematic_periods_back,
             "strategy_label": self.strategy_label,
         }
+
+    def search_config(self) -> dict[str, Any]:
+        config = self.strategy_config()
+        if not self.use_volume_filter:
+            config.pop("volume_multiplier", None)
+        return config
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         required = self.required_features
@@ -162,11 +293,14 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             .min()
             .over("_trade_date")
             .alias("_opening_low"),
-            pl.col("volume")
-            .filter(in_opening_window)
-            .mean()
-            .over("_trade_date")
-            .alias("_opening_vol_mean"),
+            (
+                pl.col("volume")
+                .filter(in_opening_window)
+                .mean()
+                .over("_trade_date")
+                if self.use_volume_filter
+                else pl.lit(None)
+            ).alias("_opening_vol_mean"),
         ]).with_columns([
             ((pl.col("_opening_close") - pl.col("_opening_open")) / pl.col("_opening_open"))
             .alias("_opening_return"),
@@ -180,15 +314,23 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             .alias("_drive_direction"),
         ])
 
-        volume_gate = pl.col("volume") > (
-            self.volume_multiplier * pl.col("_opening_vol_mean")
+        volume_gate = (
+            pl.col("volume") > (self.volume_multiplier * pl.col("_opening_vol_mean"))
+            if self.use_volume_filter
+            else pl.lit(True)
         )
 
         long_mass_gate = (
-            pl.col("directional_mass") > 0 if self.require_directional_mass else pl.lit(True)
+            pl.col("directional_mass") > 0 if self.use_directional_mass else pl.lit(True)
         )
         short_mass_gate = (
-            pl.col("directional_mass") < 0 if self.require_directional_mass else pl.lit(True)
+            pl.col("directional_mass") < 0 if self.use_directional_mass else pl.lit(True)
+        )
+        long_jerk_gate = (
+            pl.col(jerk_col) > 0 if self.use_jerk_confirmation else pl.lit(True)
+        )
+        short_jerk_gate = (
+            pl.col(jerk_col) < 0 if self.use_jerk_confirmation else pl.lit(True)
         )
 
         continue_long = (
@@ -196,7 +338,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & (pl.col("_drive_direction") == "up")
             & (pl.col("close") >= pl.col("_opening_high") * (1.0 + self.breakout_buffer_pct))
             & (pl.col(accel_col) > 0)
-            & (pl.col(jerk_col) > 0)
+            & long_jerk_gate
             & volume_gate
             & long_mass_gate
         )
@@ -205,7 +347,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & (pl.col("_drive_direction") == "down")
             & (pl.col("close") <= pl.col("_opening_low") * (1.0 - self.breakout_buffer_pct))
             & (pl.col(accel_col) < 0)
-            & (pl.col(jerk_col) < 0)
+            & short_jerk_gate
             & volume_gate
             & short_mass_gate
         )
@@ -214,7 +356,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & (pl.col("_drive_direction") == "down")
             & (pl.col("close") > pl.col("_opening_mid"))
             & (pl.col(accel_col) > 0)
-            & (pl.col(jerk_col) > 0)
+            & long_jerk_gate
             & volume_gate
             & long_mass_gate
         )
@@ -223,7 +365,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & (pl.col("_drive_direction") == "up")
             & (pl.col("close") < pl.col("_opening_mid"))
             & (pl.col(accel_col) < 0)
-            & (pl.col(jerk_col) < 0)
+            & short_jerk_gate
             & volume_gate
             & short_mass_gate
         )

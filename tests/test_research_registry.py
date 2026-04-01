@@ -17,6 +17,7 @@ from src.research import (
     ResearchToolbox,
     load_research_state,
 )
+from src.research.registry import DEFAULT_AGENT_CATALOG
 from src.research.models import (
     ConstraintSpec,
     DomainSpec,
@@ -108,6 +109,51 @@ strategies:
       vma_col: vma_10
     evidence: market impulse evidence
     notes: market impulse notes
+  "Opening Drive Classifier":
+    status: candidate
+    tickers: [SPY]
+    directions: [short]
+    optimal_params:
+      opening_window_minutes: 25
+      entry_start_offset_minutes: 30
+      entry_end_offset_minutes: 120
+      min_drive_return_pct: 0.0015
+      volume_multiplier: 1.2
+    notes: opening drive notes
+  "Jerk-Pivot Momentum (tight)":
+    status: candidate
+    tickers: [NVDA]
+    directions: [short]
+    optimal_params:
+      vpoc_proximity_pct: 0.002
+      jerk_lookback: 10
+      volume_multiplier: 1.3
+      use_volume_filter: true
+    notes: jerk pivot notes
+  "Kinematic Ladder":
+    status: dead
+    tickers: [TSLA]
+    directions: [short]
+    optimal_params:
+      regime_window: 45
+      accel_window: 20
+      use_volume_filter: false
+    notes: lineage only
+  "Compression Expansion Breakout":
+    status: dead
+    tickers: []
+    directions: []
+    optimal_params:
+      compression_window: 20
+      breakout_lookback: 20
+      compression_factor: 0.85
+    notes: lineage only
+  "Regime Router (Kinematic + Compression)":
+    status: dead
+    tickers: []
+    directions: []
+    optimal_params: {}
+    notes: lineage only
         """.strip(),
         encoding="utf-8",
     )
@@ -158,13 +204,50 @@ def test_registry_builds_tracked_and_validation_strategies(tmp_path: Path) -> No
     registry = ResearchRegistry(state_path)
 
     tracked = registry.build_tracked_strategies()
+    tracked_with_lineage = registry.build_tracked_strategies(include_lineage=True, include_dead=True)
     validation = registry.build_validation_strategies()
 
     assert [strategy.name for strategy in tracked] == [
         "Elastic Band z=1.25/w=360+dm",
+        "Jerk-Pivot Momentum (tight)",
+        "Opening Drive Classifier",
         "Market Impulse (Cross & Reclaim)",
     ]
+    assert {strategy.name for strategy in tracked_with_lineage} >= {
+        "Kinematic Ladder rw=45/aw=20-vol",
+        "Compression Expansion Breakout",
+        "Regime Router (Kinematic + Compression)",
+    }
     assert [strategy.name for strategy in validation] == ["Elastic Band z=1.25/w=360+dm"]
+
+
+def test_default_agent_catalog_contains_only_core_families(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+
+    assert registry.tracked_names() == list(DEFAULT_AGENT_CATALOG)
+    assert registry.tracked_names(include_lineage=True) == sorted([
+        "Elastic Band Reversion",
+        "Market Impulse (Cross & Reclaim)",
+        "Opening Drive Classifier",
+        "Jerk-Pivot Momentum (tight)",
+        "Kinematic Ladder",
+        "Compression Expansion Breakout",
+        "Regime Router (Kinematic + Compression)",
+    ])
+
+
+def test_lineage_strategies_remain_buildable_by_explicit_name(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+
+    assert registry.build("Kinematic Ladder").name == "Kinematic Ladder rw=45/aw=20-vol"
+    assert registry.build("Compression Expansion Breakout").name == "Compression Expansion Breakout"
+    assert registry.build("Regime Router (Kinematic + Compression)").name == "Regime Router (Kinematic + Compression)"
 
 
 def test_orchestrator_exposes_next_actions(tmp_path: Path) -> None:
@@ -436,15 +519,17 @@ def test_catalog_entry_exposes_search_spec_and_inactive_parameter_rules(tmp_path
     _write_state_file(state_path)
 
     registry = ResearchRegistry(state_path)
-    entry = registry.catalog_entry("Kinematic Ladder")
+    entry = registry.catalog_entry("Opening Drive Classifier")
 
     assert entry.search_spec is not None
     assert [parameter.name for parameter in entry.search_spec.parameters][:2] == [
-        "regime_window",
-        "accel_window",
+        "opening_window_minutes",
+        "entry_start_offset_minutes",
     ]
     assert entry.search_spec.objective is not None
     assert entry.search_spec.objective.primary_metric == "avg_test_exp_r"
+    assert entry.search_spec.objective.minimum_signals == 20
+    assert entry.search_spec.objective.tie_breakers == ["pct_positive_oos_windows", "oos_signals"]
 
     normalized = entry.search_spec.normalize_config(
         {"use_volume_filter": False, "volume_multiplier": 1.2},
@@ -456,16 +541,61 @@ def test_catalog_entry_exposes_search_spec_and_inactive_parameter_rules(tmp_path
     assert "volume_multiplier" not in normalized.config
 
 
+def test_elastic_band_catalog_entry_exposes_explicit_search_priors(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+    entry = registry.catalog_entry("Elastic Band Reversion")
+
+    assert entry.search_spec is not None
+    parameter_map = entry.search_spec.parameter_map()
+    assert parameter_map["kinematic_periods_back"].prior_center == 3
+    assert parameter_map["use_directional_mass"].prior_center is True
+    assert parameter_map["use_jerk_confirmation"].prior_center is True
+    assert entry.search_spec.objective is not None
+    assert entry.search_spec.objective.primary_metric == "avg_test_exp_r"
+    assert entry.search_spec.objective.minimum_signals == 20
+    assert entry.search_spec.objective.tie_breakers == ["pct_positive_oos_windows", "oos_signals"]
+
+
+def test_opening_drive_catalog_entry_exposes_constraints_and_priors(tmp_path: Path) -> None:
+    state_path = tmp_path / "research_state.yaml"
+    _write_state_file(state_path)
+
+    registry = ResearchRegistry(state_path)
+    entry = registry.catalog_entry("Opening Drive Classifier")
+
+    assert entry.search_spec is not None
+    parameter_map = entry.search_spec.parameter_map()
+    assert parameter_map["kinematic_periods_back"].prior_center == 3
+    assert parameter_map["use_volume_filter"].prior_center is True
+    assert parameter_map["use_directional_mass"].prior_center is True
+    assert parameter_map["use_jerk_confirmation"].prior_center is True
+    assert entry.search_spec.constraints.gating_conditions == [
+        GatingCondition(parameter="volume_multiplier", requires={"use_volume_filter": True})
+    ]
+    assert entry.search_spec.constraints.monotonic_ordering[0].parameters == [
+        "opening_window_minutes",
+        "entry_start_offset_minutes",
+        "entry_end_offset_minutes",
+    ]
+
+
 def test_search_spec_rejects_structurally_invalid_combinations(tmp_path: Path) -> None:
     state_path = tmp_path / "research_state.yaml"
     _write_state_file(state_path)
 
     registry = ResearchRegistry(state_path)
-    entry = registry.catalog_entry("Market Impulse (Cross & Reclaim)")
+    entry = registry.catalog_entry("Opening Drive Classifier")
     assert entry.search_spec is not None
 
     normalized = entry.search_spec.normalize_config(
-        {"entry_buffer_minutes": 45, "entry_window_minutes": 5},
+        {
+            "opening_window_minutes": 25,
+            "entry_start_offset_minutes": 25,
+            "entry_end_offset_minutes": 120,
+        },
         base_config=entry.strategy_config,
     )
 
