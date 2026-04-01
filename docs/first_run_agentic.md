@@ -1,5 +1,7 @@
 # First Agentic Run
 
+Current operator-facing loop documentation now lives in `docs/nightly_regime_matrix.md`.
+
 Date: 2026-03-23
 
 ## Thesis
