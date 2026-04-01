@@ -524,3 +524,101 @@ def test_review_bundle_generation_writes_required_views(tmp_path: Path) -> None:
 
     queue_df = pd.read_csv(artifacts.queue_path)
     assert {"passes_m1", "passes_m2", "passes_m3", "passes_m4", "passes_m5", "is_full_m1_m5_survivor"} <= set(queue_df.columns)
+
+
+def test_candidate_stage_payload_uses_config_json_only(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+
+    payload = manager._candidate_stage_payload(
+        {
+            "ticker": "TSLA",
+            "strategy": "Market Impulse (Cross & Reclaim)",
+            "direction": "short",
+            "config_json": json.dumps(
+                {
+                    "entry_buffer_minutes": 3,
+                    "entry_window_minutes": 45,
+                    "regime_timeframe": "30m",
+                }
+            ),
+            "candidate_key": "should-not-leak",
+            "m2_score": 123.0,
+        }
+    )
+
+    assert payload == {
+        "ticker": "TSLA",
+        "strategy": "Market Impulse (Cross & Reclaim)",
+        "direction": "short",
+        "entry_buffer_minutes": 3,
+        "entry_window_minutes": 45,
+        "regime_timeframe": "30m",
+    }
+
+
+def test_catalog_strategy_name_uses_family_for_elastic_variants(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+
+    assert manager._catalog_strategy_name(
+        {
+            "strategy_family": "elastic_band_reversion",
+            "strategy": "Elastic Band z=2.0/w=240+dm",
+        }
+    ) == "Elastic Band Reversion"
+    assert manager._catalog_strategy_name(
+        {
+            "strategy_family": "market_impulse",
+            "strategy": "Market Impulse (Cross & Reclaim)",
+        }
+    ) == "Market Impulse (Cross & Reclaim)"
+
+
+def test_load_enriched_frame_for_strategies_uses_union_of_required_features(tmp_path: Path) -> None:
+    captured: list[set[str]] = []
+
+    class _StrategyA:
+        required_features = {"alpha"}
+        feature_requests: tuple[str, ...] = ()
+
+    class _StrategyB:
+        required_features = {"beta"}
+        feature_requests: tuple[str, ...] = ()
+
+    manager = HumanReviewQueueManager(
+        tmp_path / "control",
+        frame_loader=lambda ticker, start, end: _sample_opening_drive_frame(str(ticker)),
+        enricher=lambda frame, required: captured.append(set(required)) or frame,
+        followup_executor=None,
+    )
+
+    frame = manager._load_enriched_frame_for_strategies(
+        ticker="SPY",
+        strategies=[_StrategyA(), _StrategyB()],
+        start_date=date(2026, 3, 27),
+        end_date=date(2026, 3, 31),
+    )
+
+    assert not frame.is_empty()
+    assert captured == [{"alpha", "beta"}]
+
+
+def test_write_frame_if_not_empty_stringifies_nested_values(tmp_path: Path) -> None:
+    from src.research.review_queue import _write_frame_if_not_empty
+
+    path = tmp_path / "nested.csv"
+    frame = pl.DataFrame(
+        [
+            {
+                "ticker": "QQQ",
+                "payload": {"window": 60, "tf": "1h"},
+                "points": [1, 2, 3],
+            }
+        ]
+    )
+
+    _write_frame_if_not_empty(frame, path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "QQQ" in text
+    assert '""window"": 60' in text
+    assert "[1, 2, 3]" in text

@@ -41,6 +41,12 @@ REVIEW_BUNDLE_DIRNAME = "review_bundle"
 FOLLOWUP_DIRNAME = "followup_runs"
 CHARTS_DIRNAME = "charts"
 
+FAMILY_CATALOG_STRATEGY_NAMES = {
+    "market_impulse": "Market Impulse (Cross & Reclaim)",
+    "jerk_pivot_momentum": "Jerk-Pivot Momentum (tight)",
+    "elastic_band_reversion": "Elastic Band Reversion",
+}
+
 QUEUE_STATUS_NEW = "NEW"
 QUEUE_STATUS_PENDING = "PENDING"
 QUEUE_STATUS_EXECUTING = "EXECUTING"
@@ -584,9 +590,17 @@ class HumanReviewQueueManager:
         config: Any,
         artifact_dir: Path,
     ) -> dict[str, Any]:
-        entry = self.registry.catalog_entry(str(row["strategy"]))
-        candidate_frame = self._load_enriched_candidate_frame(row=row, config=config)
-        neighbor_configs = build_neighbor_configs(entry, candidate_params(row), max_configs=8)
+        strategy_name = self._catalog_strategy_name(row)
+        base_config = self._queue_config_params(row)
+        entry = self.registry.catalog_entry(strategy_name, base_config)
+        neighbor_configs = build_neighbor_configs(entry, base_config, max_configs=8)
+        strategies = [self.registry.build(strategy_name, neighbor) for neighbor in neighbor_configs]
+        candidate_frame = self._load_enriched_frame_for_strategies(
+            ticker=str(row["ticker"]),
+            strategies=strategies,
+            start_date=config.defaults.start,
+            end_date=config.defaults.end,
+        )
         windows = build_windows(
             config.defaults.start,
             config.defaults.end,
@@ -598,8 +612,7 @@ class HumanReviewQueueManager:
 
         m1_records: list[dict[str, Any]] = []
         m2_frames: list[pl.DataFrame] = []
-        for neighbor in neighbor_configs:
-            strategy = self.registry.build(str(row["strategy"]), neighbor)
+        for neighbor, strategy in zip(neighbor_configs, strategies, strict=False):
             walk_rows = run_walk_forward_for_strategies(
                 ticker=row["ticker"],
                 df=candidate_frame,
@@ -1092,10 +1105,25 @@ class HumanReviewQueueManager:
         start_date: date,
         end_date: date,
     ) -> pl.DataFrame:
+        return self._load_enriched_frame_for_strategies(
+            ticker=ticker,
+            strategies=[strategy],
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def _load_enriched_frame_for_strategies(
+        self,
+        *,
+        ticker: str,
+        strategies: list[Any],
+        start_date: date,
+        end_date: date,
+    ) -> pl.DataFrame:
         raw = self.frame_loader(ticker, start_date, end_date)
         if raw.is_empty():
             return raw
-        return self.enricher(raw, required_feature_union([strategy]))
+        return self.enricher(raw, required_feature_union(strategies))
 
     def _load_raw_chart_frame(self, *, ticker: str, config: Any) -> pl.DataFrame:
         recent_start = config.defaults.end - timedelta(days=14)
@@ -1121,8 +1149,24 @@ class HumanReviewQueueManager:
             "ticker": row["ticker"],
             "strategy": row["strategy"],
             "direction": row["direction"],
-            **candidate_params(row),
+            **self._queue_config_params(row),
         }
+
+    def _queue_config_params(self, row: dict[str, Any]) -> dict[str, Any]:
+        config_json = row.get("config_json")
+        if config_json not in (None, ""):
+            try:
+                loaded = json.loads(str(config_json))
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(loaded, dict):
+                    return {str(key): value for key, value in loaded.items()}
+        return candidate_params(row)
+
+    def _catalog_strategy_name(self, row: dict[str, Any]) -> str:
+        family = str(row.get("strategy_family", "") or "").strip()
+        return FAMILY_CATALOG_STRATEGY_NAMES.get(family, str(row["strategy"]))
 
     def _index_frame(
         self,
@@ -1353,7 +1397,17 @@ def _write_frame_if_not_empty(frame: pl.DataFrame, path: Path) -> None:
     if frame.is_empty():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.write_csv(path)
+    safe_rows = [
+        {key: _csv_safe_value(value) for key, value in row.items()}
+        for row in frame.iter_rows(named=True)
+    ]
+    pl.DataFrame(safe_rows).write_csv(path)
+
+
+def _csv_safe_value(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple, set)):
+        return json.dumps(json_ready(value), sort_keys=True)
+    return value
 
 
 __all__ = [
