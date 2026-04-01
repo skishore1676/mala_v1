@@ -307,6 +307,21 @@ Agent-native search conventions now in force:
 - Slice-local memory queries are part of the canonical stage loop in M1/M2, alongside sweeps and point evaluation, rather than an out-of-band helper surface.
 - `src.research` is safe to import from strategy-adjacent code because the package surface now lazily loads heavier orchestration modules instead of importing them eagerly.
 
+## Nightly Review Loop
+
+The canonical operator-facing nightly workflow is now `scripts/run_nightly_regime_matrix.py`.
+
+That nightly loop:
+
+- scouts the default Tier 1 watchlist across the core research families,
+- merges nightly M2 survivors into a durable human review queue,
+- refreshes local Plotly chart artifacts for each queued survivor,
+- executes approved follow-up actions under explicit nightly budget caps, and
+- writes a review workbook/CSV bundle for the next morning's inspection pass.
+
+Important defaults live in [config/nightly_regime_matrix.yaml](/Users/suman/kg_env/projects/mala_v1/config/nightly_regime_matrix.yaml).
+Operator details for the queue, review artifacts, and terminal-state rules live in [docs/nightly_regime_matrix.md](/Users/suman/kg_env/projects/mala_v1/docs/nightly_regime_matrix.md).
+
 A canonical execution pattern now exists for agentic research work:
 
 ```python

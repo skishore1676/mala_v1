@@ -36,6 +36,11 @@ def main() -> None:
         print(f"RUN_DIR_{family.upper()}={run_dir}")
     print(f"DEPLOYMENT_CANDIDATES={result.deployment_candidates_path}")
     print(f"PLAYBOOK_CATALOG={result.playbook_catalog_path}")
+    print(f"REVIEW_QUEUE={result.review_queue_path}")
+    print(f"REVIEW_HISTORY={result.review_history_path}")
+    print(f"REVIEW_WORKBOOK={result.review_workbook_path}")
+    print(f"REVIEW_BUNDLE={result.review_bundle_dir}")
+    print(f"CHARTS_DIR={result.charts_dir}")
     print(f"NIGHTLY_MATRIX_MANIFEST={result.manifest_path}")
 
 

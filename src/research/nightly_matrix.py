@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 import re
@@ -20,6 +20,7 @@ from src.research.loop_contracts import (
     LOOP_ARTIFACT_SCHEMA_VERSION,
 )
 from src.research.loop_export import LoopArtifactExporter
+from src.research.review_queue import HumanReviewQueueManager
 from src.research.run_storage import create_run_dir
 
 
@@ -99,10 +100,22 @@ class NightlyResearchDefaults(BaseModel):
         ]
 
 
+class NightlyFollowupBudgets(BaseModel):
+    max_new_m2_rows_per_night: int = 10
+    max_retune_tasks_per_night: int = 4
+    max_symbol_expansion_tasks_per_night: int = 3
+    max_m3_promotions_per_night: int = 3
+    max_total_followup_tasks_per_night: int = 8
+
+
 class NightlyRegimeMatrixConfig(BaseModel):
     schema_version: int = NIGHTLY_REGIME_MATRIX_CONFIG_VERSION
     output_root: str = "data/results/nightly_regime_matrix"
-    watchlist: list[str] = Field(default_factory=lambda: ["SPY", "QQQ", "IWM", "TSLA", "PLTR"])
+    research_control_root: str | None = None
+    watchlist: list[str] = Field(default_factory=lambda: ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL"])
+    tier2_watchlist: list[str] = Field(
+        default_factory=lambda: ["META", "MSFT", "AMZN", "AMD", "SMH", "XLF"]
+    )
     enabled_strategy_families: list[str] = Field(
         default_factory=lambda: [
             "market_impulse",
@@ -111,10 +124,14 @@ class NightlyRegimeMatrixConfig(BaseModel):
         ]
     )
     defaults: NightlyResearchDefaults = Field(default_factory=NightlyResearchDefaults)
+    followup_budgets: NightlyFollowupBudgets = Field(default_factory=NightlyFollowupBudgets)
 
     @model_validator(mode="after")
     def validate_config(self) -> "NightlyRegimeMatrixConfig":
         self.watchlist = [symbol.upper() for symbol in self.watchlist]
+        self.tier2_watchlist = [symbol.upper() for symbol in self.tier2_watchlist]
+        if self.research_control_root is None:
+            self.research_control_root = f"{self.output_root}/research_control"
         if self.schema_version != NIGHTLY_REGIME_MATRIX_CONFIG_VERSION:
             raise ValueError(
                 f"Unsupported nightly config schema_version: {self.schema_version}"
@@ -138,6 +155,11 @@ class NightlyRegimeMatrixResult:
     deployment_candidates_path: Path
     playbook_catalog_path: Path
     manifest_path: Path
+    review_queue_path: Path
+    review_history_path: Path
+    review_workbook_path: Path
+    review_bundle_dir: Path
+    charts_dir: Path
 
 
 FamilyRunner = Callable[[str, NightlyRegimeMatrixConfig, Path], Path]
@@ -155,6 +177,8 @@ def run_nightly_regime_matrix(
     bundle_dir: str | Path | None = None,
     family_runner: FamilyRunner | None = None,
     exporter: LoopArtifactExporter | None = None,
+    run_date: date | None = None,
+    review_queue_manager: HumanReviewQueueManager | None = None,
 ) -> NightlyRegimeMatrixResult:
     resolved_bundle_dir = (
         Path(bundle_dir).resolve()
@@ -164,6 +188,8 @@ def run_nightly_regime_matrix(
     resolved_bundle_dir.mkdir(parents=True, exist_ok=True)
     runner = family_runner or _run_family_research
     loop_exporter = exporter or LoopArtifactExporter()
+    resolved_run_date = run_date or datetime.now().date()
+    queue_manager = review_queue_manager or HumanReviewQueueManager(config.research_control_root)
 
     run_dirs: dict[str, Path] = {}
     for family in config.enabled_strategy_families:
@@ -175,14 +201,27 @@ def run_nightly_regime_matrix(
         watchlist=config.watchlist,
         enabled_strategy_families=config.enabled_strategy_families,
     )
+    review_artifacts = queue_manager.refresh_queue(
+        run_dirs=run_dirs,
+        config=config,
+        run_date=resolved_run_date,
+    )
 
     manifest_path = resolved_bundle_dir / "nightly_matrix_manifest.json"
     manifest_payload = {
         "config_schema_version": NIGHTLY_REGIME_MATRIX_CONFIG_VERSION,
         "config_watchlist": config.watchlist,
+        "config_tier2_watchlist": config.tier2_watchlist,
         "enabled_strategy_families": config.enabled_strategy_families,
         "bundle_dir": str(resolved_bundle_dir),
         "run_dirs": {family: str(path) for family, path in run_dirs.items()},
+        "review_control": {
+            "queue_path": str(review_artifacts.queue_path),
+            "history_path": str(review_artifacts.history_path),
+            "workbook_path": str(review_artifacts.workbook_path),
+            "review_bundle_dir": str(review_artifacts.review_bundle_dir),
+            "charts_dir": str(review_artifacts.charts_dir),
+        },
         "contracts": {
             DEPLOYMENT_CANDIDATES_CONTRACT_NAME: {
                 "schema_version": LOOP_ARTIFACT_SCHEMA_VERSION,
@@ -204,6 +243,11 @@ def run_nightly_regime_matrix(
         deployment_candidates_path=candidates_path,
         playbook_catalog_path=playbook_path,
         manifest_path=manifest_path,
+        review_queue_path=review_artifacts.queue_path,
+        review_history_path=review_artifacts.history_path,
+        review_workbook_path=review_artifacts.workbook_path,
+        review_bundle_dir=review_artifacts.review_bundle_dir,
+        charts_dir=review_artifacts.charts_dir,
     )
 
 

@@ -1,11 +1,20 @@
 schema_version: 1
 output_root: data/results/nightly_regime_matrix
+research_control_root: data/results/nightly_regime_matrix/research_control
 watchlist:
   - SPY
   - QQQ
   - IWM
+  - NVDA
   - TSLA
-  - PLTR
+  - AAPL
+tier2_watchlist:
+  - META
+  - MSFT
+  - AMZN
+  - AMD
+  - SMH
+  - XLF
 enabled_strategy_families:
   - market_impulse
   - jerk_pivot_momentum
@@ -31,3 +40,9 @@ defaults:
   base_cost_r: 0.08
   bootstrap_iters: 4000
   top_per_ticker: 1
+followup_budgets:
+  max_new_m2_rows_per_night: 10
+  max_retune_tasks_per_night: 4
+  max_symbol_expansion_tasks_per_night: 3
+  max_m3_promotions_per_night: 3
+  max_total_followup_tasks_per_night: 8

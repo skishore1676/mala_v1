@@ -1,17 +1,39 @@
 # Nightly Regime Matrix
 
-The nightly regime matrix is Mala's fixed-watchlist handoff into Bhiksha.
+The nightly regime matrix is Mala's operator-facing nightly research loop.
 
-It runs the current research families across a configured symbol universe, then
-publishes schema-v2 loop artifacts that Bhiksha can route from the next morning.
+It now does two jobs in one pass:
+
+1. Run the broad nightly M1/M2 scout across the default strategy families and Tier 1 watchlist.
+2. Maintain the durable human review queue, refresh local charts, and execute approved follow-up actions under hard nightly caps.
 
 ## Current Scope
 
 - Watchlist source: `config/nightly_regime_matrix.yaml`
+- Tier 1 defaults:
+  - `SPY`
+  - `QQQ`
+  - `IWM`
+  - `NVDA`
+  - `TSLA`
+  - `AAPL`
+- Tier 2 defaults:
+  - `META`
+  - `MSFT`
+  - `AMZN`
+  - `AMD`
+  - `SMH`
+  - `XLF`
 - Strategy families:
   - `market_impulse`
   - `jerk_pivot_momentum`
   - `elastic_band_reversion`
+- Follow-up budgets:
+  - `max_new_m2_rows_per_night = 10`
+  - `max_retune_tasks_per_night = 4`
+  - `max_symbol_expansion_tasks_per_night = 3`
+  - `max_m3_promotions_per_night = 3`
+  - `max_total_followup_tasks_per_night = 8`
 - Operator contexts emitted for every watched symbol:
   - `bullish_trend_intraday`
   - `bullish_mean_reversion_intraday`
@@ -26,14 +48,14 @@ and stay manual-lane for Bhiksha until execution capability expands.
 ## Run It
 
 ```bash
-python scripts/run_nightly_regime_matrix.py
+./.venv/bin/python scripts/run_nightly_regime_matrix.py
 ```
 
 Optional:
 
 ```bash
-python scripts/run_nightly_regime_matrix.py --config config/nightly_regime_matrix.yaml
-python scripts/run_nightly_regime_matrix.py --bundle-dir /tmp/nightly_matrix_bundle
+./.venv/bin/python scripts/run_nightly_regime_matrix.py --config config/nightly_regime_matrix.yaml
+./.venv/bin/python scripts/run_nightly_regime_matrix.py --bundle-dir /tmp/nightly_matrix_bundle
 ```
 
 ## Outputs
@@ -49,6 +71,114 @@ Important files:
 - `deployment_candidates.json`
 - `playbook_catalog.json`
 - `nightly_matrix_manifest.json`
+
+The nightly loop also writes a stable research-control area under:
+
+```text
+data/results/nightly_regime_matrix/research_control/
+```
+
+Important review artifacts there:
+
+- `m2_human_review_queue.csv`: canonical human-editable queue
+- `m2_human_review_history.csv`: rolling nightly observation history
+- `review_bundle/human_review_workbook.xlsx`
+- `review_bundle/m2_review.csv`
+- `review_bundle/recent_history.csv`
+- `review_bundle/execution_queue.csv`
+- `review_bundle/full_survivors.csv`
+- `review_bundle/charts_index.csv`
+- `charts/<candidate_key>.html`
+
+## Queue Semantics
+
+Each queue row represents one stable candidate identity built from:
+
+- strategy family
+- ticker
+- direction
+- normalized config signature
+- research slice identity
+
+The queue is the source of truth for human actions and review state. It includes:
+
+- current M1/M2 metrics and gate outcomes
+- `research_slice_id`
+- `chart_link`
+- `human_decision`
+- `human_notes`
+- `priority`
+- `queue_status`
+- `latest_stage_reached`
+- `latest_stage_decision`
+- `passes_m1` through `passes_m5`
+- `is_full_m1_m5_survivor`
+- `last_seen_run_date`
+- `last_action_run_date`
+
+Queue states:
+
+- `NEW`
+- `PENDING`
+- `EXECUTING`
+- `EXECUTED`
+- `KILLED`
+- `STALE`
+- `ERROR`
+
+Terminal-state rule:
+
+- If a candidate is already `EXECUTED` or `KILLED`, a later nightly M2 sighting only refreshes observational fields such as metrics, `last_seen_run_date`, and `chart_link`.
+- The nightly scout must not silently reopen that row back to `PENDING`.
+- If the human edits the terminal row and changes `queue_status` or `human_decision`, the row becomes actionable again on a later nightly run.
+
+## Follow-Up Actions
+
+Approved rows are consumed nightly from the queue by:
+
+- highest `priority`
+- then newest human-edited pending rows
+- then newest supporting evidence
+
+Supported actions:
+
+- `promote_to_m3`: run the narrow M3/M4/M5 path and mark the row `EXECUTED` when the task run completes
+- `retune`: run a focused local M1/M2 neighborhood search around the current config
+- `expand_symbols`: run the same family/config neighborhood on Tier 2 symbols
+- `kill`: mark the row `KILLED`
+
+Rows beyond the nightly caps remain `PENDING`.
+
+## Charts
+
+Every nightly M2 survivor gets a self-contained local Plotly candlestick HTML chart.
+
+- Source data: raw/enriched OHLCV bars, not just compact trade logs
+- Window: last 3 trading days of recent available context
+- Overlays: long/short signal markers
+- Metadata: candidate family, symbol, direction, and config in the chart title/subtitle
+- Repeats: the same candidate key refreshes the same chart file instead of creating duplicates
+
+## Review Surface
+
+The workbook/CSV bundle is a projection of the queue, not a second state store.
+
+It includes these sheets/views:
+
+- `M2 Review`
+- `Recent History`
+- `Execution Queue`
+- `Full Survivors`
+- `Charts Index`
+
+Full M1-M5 survivors are explicit via:
+
+- `passes_m1`
+- `passes_m2`
+- `passes_m3`
+- `passes_m4`
+- `passes_m5`
+- `is_full_m1_m5_survivor`
 
 ## Contract
 
@@ -93,4 +223,4 @@ The nightly matrix currently delegates to:
 
 Each family runner still writes its own dated run directory and can be executed
 independently, but the nightly matrix is now the canonical operator-facing
-entrypoint for the Mala -> Bhiksha loop.
+entrypoint for the broad scout plus human-review follow-up loop.

@@ -31,6 +31,7 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     config = load_nightly_regime_matrix_config(config_path)
+    config.research_control_root = str(tmp_path / "control")
     assert config.watchlist == ["IWM", "TSLA"]
 
     def fake_family_runner(family: str, loaded_config: NightlyRegimeMatrixConfig, bundle_dir: Path) -> Path:
@@ -105,9 +106,18 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     ]
     assert manifest["config_watchlist"] == ["IWM", "TSLA"]
     assert manifest["contracts"]["deployment_candidates"]["schema_version"] == LOOP_ARTIFACT_SCHEMA_VERSION
+    assert result.review_queue_path.exists()
+    assert result.review_history_path.exists()
+    assert result.review_workbook_path.exists()
     assert playbook_catalog["contexts"]["TSLA|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_with_survivors"
     assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["proposed_candidates"]
     assert playbook_catalog["contexts"]["TSLA|bearish_mean_reversion_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
+
+
+def test_nightly_regime_matrix_default_watchlist_includes_tier1_single_names() -> None:
+    config = NightlyRegimeMatrixConfig()
+
+    assert {"SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL"} <= set(config.watchlist)
 
 
 def _write_run(

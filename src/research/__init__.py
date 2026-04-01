@@ -30,9 +30,11 @@ __all__ = [
     "DomainSpec",
     "ForbiddenPair",
     "GatingCondition",
+    "HumanReviewQueueManager",
     "LoopArtifactExporter",
     "MonotonicOrdering",
     "NightlyRegimeMatrixConfig",
+    "NightlyFollowupBudgets",
     "NightlyRegimeMatrixResult",
     "ObjectiveSpec",
     "OrchestrationAction",
@@ -53,8 +55,10 @@ __all__ = [
 ]
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "HumanReviewQueueManager": ("src.research.review_queue", "HumanReviewQueueManager"),
     "LoopArtifactExporter": ("src.research.loop_export", "LoopArtifactExporter"),
     "NightlyRegimeMatrixConfig": ("src.research.nightly_matrix", "NightlyRegimeMatrixConfig"),
+    "NightlyFollowupBudgets": ("src.research.nightly_matrix", "NightlyFollowupBudgets"),
     "NightlyRegimeMatrixResult": ("src.research.nightly_matrix", "NightlyRegimeMatrixResult"),
     "ResearchJournal": ("src.research.reporting", "ResearchJournal"),
     "ResearchOrchestrator": ("src.research.orchestrator", "ResearchOrchestrator"),
