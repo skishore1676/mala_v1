@@ -269,7 +269,7 @@ Future agentic workflow work should treat that file as the canonical operating b
 The first reusable orchestration pieces now live in:
 
 - `src/research/registry.py`: repo-memory-backed strategy discovery and instantiation,
-- `src/research/tools.py`: callable experiment tools (`parameter_sweep`, `baseline_comparison`, `ablation_check`, `walk_forward`, `holdout_validation`, `execution_mapping`),
+- `src/research/tools.py`: callable experiment tools (`parameter_sweep`, `evaluate_config`, `query_incumbent`, `query_pareto_front`, `query_neighborhood`, `query_dead_zones`, `baseline_comparison`, `ablation_check`, `walk_forward`, `holdout_validation`, `execution_mapping`),
 - `src/research/stages/walk_forward.py`: reusable walk-forward math and aggregation,
 - `src/research/stages/convergence.py`: reusable convergence gate logic,
 - `src/research/stages/holdout.py`: reusable holdout candidate selection, ratio fitting, and pass/fail summarization,
@@ -281,6 +281,14 @@ Legacy stage runners now live under `scripts/legacy/`, and the active execution 
 Because the long-term system is intentionally agent-driven over a wide parameter surface, legacy runners should be treated as archived reference material rather than a parallel workflow. Future research changes should prefer reusable logic in `src/research/`, `src/oracle/`, and `src/newton/`, even when preserving backward compatibility for old scripts.
 
 The research flow also uses strategy-declared `required_features` to ask Newton only for the needed transforms, including parameterized `MarketImpulseTransform` variants through the same `enrich_for_features(...)` pipeline used by other strategies.
+
+Agent-native search conventions now in force:
+
+- When a strategy exposes `search_spec`, that is the canonical optimization surface for sweeps and point evaluation.
+- `parameter_sweep()` applies gating and constraint normalization before spending search budget, so inactive parameters are pruned rather than rediscovered through downstream deduping.
+- `evaluate_config()` records deterministic config signatures plus compact memory rows for iterative optimization.
+- `query_incumbent()` and `query_pareto_front()` rank only statistically competitive configs by default; low-signal or otherwise insufficient evaluations are excluded unless explicitly requested.
+- `src.research` is safe to import from strategy-adjacent code because the package surface now lazily loads heavier orchestration modules instead of importing them eagerly.
 
 A canonical execution pattern now exists for agentic research work:
 
