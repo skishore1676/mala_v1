@@ -32,6 +32,7 @@ _NON_PARAM_COLUMNS = {
     "oos_windows",
     "oos_signals",
     "avg_test_exp_r",
+    "avg_test_mfe_mae_ratio",
     "pct_positive_oos_windows",
     "avg_test_confidence",
     "observed_cost_points",

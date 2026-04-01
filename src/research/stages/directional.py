@@ -35,10 +35,10 @@ def available_directional_snapshot_windows(df: pl.DataFrame) -> tuple[int, ...]:
 def resolve_evaluation_window(
     metrics: MetricsCalculator | None = None,
     evaluation_window: int | None = None,
-) -> int:
-    resolved = evaluation_window if evaluation_window is not None else (
-        metrics.forward_window if metrics is not None else settings.forward_window_bars
-    )
+) -> int | None:
+    if evaluation_window is None:
+        return None
+    resolved = evaluation_window
     if resolved <= 0:
         raise ValueError("evaluation_window must be a positive integer.")
     return resolved
@@ -51,7 +51,9 @@ def canonical_directional_snapshot_windows(
     reporting_windows: Iterable[int] = DEFAULT_DIRECTIONAL_SNAPSHOT_WINDOWS,
 ) -> tuple[int, ...]:
     resolved_window = resolve_evaluation_window(metrics, evaluation_window)
-    windows = {resolved_window, *reporting_windows}
+    windows = set(reporting_windows)
+    if resolved_window is not None:
+        windows.add(resolved_window)
     return tuple(sorted(window for window in windows if window > 0))
 
 
@@ -63,16 +65,19 @@ def resolve_directional_metric_columns(
     allow_eod_fallback: bool = True,
 ) -> tuple[str, str, int | None]:
     resolved_window = resolve_evaluation_window(metrics, evaluation_window)
+    if resolved_window is None:
+        if "forward_mfe_eod" in df.columns and "forward_mae_eod" in df.columns:
+            return "forward_mfe_eod", "forward_mae_eod", None
+        available = available_directional_snapshot_windows(df)
+        if available:
+            fallback_window = min(available)
+            fallback_mfe, fallback_mae = directional_metric_column_names(fallback_window)
+            return fallback_mfe, fallback_mae, fallback_window
+        raise ValueError("Directional evaluation columns are missing for end-of-day evaluation.")
+
     mfe_col, mae_col = directional_metric_column_names(resolved_window)
     if mfe_col in df.columns and mae_col in df.columns:
         return mfe_col, mae_col, resolved_window
-
-    if evaluation_window is None:
-        available = available_directional_snapshot_windows(df)
-        if available:
-            fallback_window = resolved_window if resolved_window in available else min(available)
-            fallback_mfe, fallback_mae = directional_metric_column_names(fallback_window)
-            return fallback_mfe, fallback_mae, fallback_window
 
     if allow_eod_fallback and "forward_mfe_eod" in df.columns and "forward_mae_eod" in df.columns:
         return "forward_mfe_eod", "forward_mae_eod", None

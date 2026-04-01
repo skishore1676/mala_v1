@@ -267,6 +267,7 @@ def test_build_candidate_strategy_ignores_rank_columns() -> None:
             "use_volume_filter": False,
             "volume_multiplier": 1.2,
             "m1_score": 301.0,
+            "avg_test_mfe_mae_ratio": 1.7,
         }
     )
 
@@ -366,7 +367,7 @@ def test_holdout_stage_logic() -> None:
     assert row["decision"] == "promote_to_execution_mapping"
 
 
-def test_choose_ratio_prefers_fixed_horizon_metrics_by_default() -> None:
+def test_choose_ratio_prefers_eod_metrics_by_default() -> None:
     chosen_ratio, stats = choose_ratio(
         calib_df=_fixed_horizon_eval_df(),
         direction="combined",
@@ -375,8 +376,8 @@ def test_choose_ratio_prefers_fixed_horizon_metrics_by_default() -> None:
         min_calib_signals=1,
     )
 
-    assert chosen_ratio == 1.0
-    assert stats["evaluation_window"] == 15
+    assert chosen_ratio == 2.0
+    assert stats["evaluation_window"] is None
 
 
 def test_holdout_summary_preserves_candidate_config_columns() -> None:
@@ -572,7 +573,7 @@ def test_run_walk_forward_for_strategies() -> None:
     assert rows[0]["strategy"] == "Stub Directional"
 
 
-def test_run_walk_forward_uses_fixed_horizon_metrics_by_default(monkeypatch) -> None:
+def test_run_walk_forward_uses_eod_metrics_by_default(monkeypatch) -> None:
     metrics = MetricsCalculator()
     monkeypatch.setattr(
         metrics,
@@ -607,11 +608,51 @@ def test_run_walk_forward_uses_fixed_horizon_metrics_by_default(monkeypatch) -> 
     )
 
     assert rows
+    assert {row["selected_ratio"] for row in rows} == {2.0}
+    assert {row["evaluation_window"] for row in rows} == {None}
+
+
+def test_run_walk_forward_uses_explicit_fixed_horizon(monkeypatch) -> None:
+    metrics = MetricsCalculator()
+    monkeypatch.setattr(
+        metrics,
+        "add_directional_forward_metrics",
+        lambda df, snapshot_windows: _fixed_horizon_eval_df(),
+    )
+    windows = [
+        type("W", (), {
+            "train_start": date(2025, 1, 1),
+            "train_end": date(2025, 1, 1),
+            "test_start": date(2025, 1, 1),
+            "test_end": date(2025, 1, 1),
+        })()
+    ]
+
+    rows = run_walk_forward_for_strategies(
+        ticker="SPY",
+        df=_fixed_horizon_eval_df().select([
+            "timestamp",
+            "close",
+            "high",
+            "low",
+            "signal",
+            "signal_direction",
+        ]),
+        strategies=[_StubStrategy()],
+        windows=windows,
+        ratios=[1.0, 2.0],
+        metrics=metrics,
+        min_signals=1,
+        cost_r=0.0,
+        evaluation_window=15,
+    )
+
+    assert rows
     assert {row["selected_ratio"] for row in rows} == {1.0}
     assert {row["evaluation_window"] for row in rows} == {15}
 
 
-def test_execution_mapping_uses_fixed_horizon_metrics_by_default(monkeypatch) -> None:
+def test_execution_mapping_uses_eod_metrics_by_default(monkeypatch) -> None:
     metrics = MetricsCalculator()
     monkeypatch.setattr(
         execution_stage,
@@ -646,6 +687,49 @@ def test_execution_mapping_uses_fixed_horizon_metrics_by_default(monkeypatch) ->
         holdout_end=date(2025, 1, 1),
         base_cost_r=0.0,
         stress_cfg=ExecutionStressConfig(bootstrap_iters=10),
+    )
+
+    assert rows
+    assert {row["evaluation_window"] for row in rows} == {None}
+    assert {row["base_exp_r"] for row in rows} == {2.0}
+
+
+def test_execution_mapping_uses_explicit_fixed_horizon(monkeypatch) -> None:
+    metrics = MetricsCalculator()
+    monkeypatch.setattr(
+        execution_stage,
+        "build_candidate_strategy",
+        lambda candidate: _StubStrategy(),
+    )
+    monkeypatch.setattr(
+        metrics,
+        "add_directional_forward_metrics",
+        lambda df, snapshot_windows: _fixed_horizon_eval_df(),
+    )
+
+    rows = run_execution_mapping_for_candidates(
+        promoted=pl.DataFrame(
+            [{"ticker": "SPY", "strategy": "Stub Directional", "direction": "long"}]
+        ),
+        holdout_detail=pl.DataFrame(
+            [{"ticker": "SPY", "strategy": "Stub Directional", "direction": "long", "selected_ratio": 2.0}]
+        ),
+        ticker_frames={
+            "SPY": _fixed_horizon_eval_df().select([
+                "timestamp",
+                "close",
+                "high",
+                "low",
+                "signal",
+                "signal_direction",
+            ])
+        },
+        metrics=metrics,
+        holdout_start=date(2025, 1, 1),
+        holdout_end=date(2025, 1, 1),
+        base_cost_r=0.0,
+        stress_cfg=ExecutionStressConfig(bootstrap_iters=10),
+        evaluation_window=15,
     )
 
     assert rows
