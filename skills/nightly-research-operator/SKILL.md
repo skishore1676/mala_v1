@@ -60,6 +60,9 @@ This skill is for operations, not strategy invention. Use it when the job is "ma
 
 ## Critical Rules
 
+- Nightly family sweeps can run for a long time with little or no terminal output.
+- Do not kill or restart the nightly matrix just because stdout is quiet for several minutes.
+- Treat the process as alive if the parent nightly runner or a family subprocess is still present and consuming time or CPU.
 - Zero survivors is a valid research outcome.
 - Do not treat empty M1 shortlists, empty M2 convergence results, or empty later-stage CSVs as fatal by default.
 - Even on a zero-survivor night, the operator must still leave behind an initialized review surface:
