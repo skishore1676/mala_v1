@@ -142,6 +142,53 @@ def test_validate_contract_metadata_rejects_missing_or_wrong_fields() -> None:
         )
 
 
+def test_loop_export_treats_empty_stage_csvs_as_no_survivor_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "market_impulse_run"
+    run_dir.mkdir()
+    (run_dir / "M4_holdout_validation_summary.csv").write_text("\n", encoding="utf-8")
+    (run_dir / "M4_holdout_validation_detail.csv").write_text("\n", encoding="utf-8")
+    (run_dir / "M5_execution_mapping_detail.csv").write_text("\n", encoding="utf-8")
+    manifest = {
+        "stages": [
+            {
+                "stage": "M4",
+                "decision": "retune",
+                "recorded_at": "2026-03-30T19:55:58.630829+00:00",
+                "artifacts": {
+                    "summary": str(run_dir / "M4_holdout_validation_summary.csv"),
+                    "detail": str(run_dir / "M4_holdout_validation_detail.csv"),
+                },
+                "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+            },
+            {
+                "stage": "M5",
+                "decision": "kill",
+                "recorded_at": "2026-03-30T19:55:58.631909+00:00",
+                "artifacts": {
+                    "detail": str(run_dir / "M5_execution_mapping_detail.csv"),
+                },
+                "context": {"strategy_family": "Market Impulse (Cross & Reclaim)"},
+            },
+        ]
+    }
+    (run_dir / "research_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    out_dir = tmp_path / "loop_artifacts"
+    exporter = LoopArtifactExporter()
+    candidates_path, playbook_path = exporter.export_runs(
+        [run_dir],
+        out_dir=out_dir,
+        watchlist=["SPY"],
+        enabled_strategy_families=["market_impulse"],
+    )
+
+    candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+    playbook_payload = json.loads(playbook_path.read_text(encoding="utf-8"))
+
+    assert candidates_payload["candidates"] == []
+    assert playbook_payload["contexts"]["SPY|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
+
+
 def _write_run(
     run_dir: Path,
     *,

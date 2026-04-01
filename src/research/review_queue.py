@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import pandas as pd
 import polars as pl
+from polars.exceptions import NoDataError
 
 from src.chronos.storage import LocalStorage
 from src.config import PROJECT_ROOT
@@ -1315,7 +1316,10 @@ def _read_optional_csv(run_dir: Path, *names: str) -> pl.DataFrame:
     for name in names:
         path = run_dir / name
         if path.exists():
-            return pl.read_csv(path)
+            try:
+                return pl.read_csv(path)
+            except NoDataError:
+                return pl.DataFrame()
     return pl.DataFrame()
 
 

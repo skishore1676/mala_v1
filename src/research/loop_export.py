@@ -11,6 +11,7 @@ import subprocess
 from typing import Any
 
 import polars as pl
+from polars.exceptions import NoDataError
 
 from src.config import PROJECT_ROOT
 from src.research.loop_contracts import (
@@ -613,7 +614,10 @@ class LoopArtifactExporter:
                 absolute = fallback
             else:
                 raise FileNotFoundError(f"Missing artifact {artifact_name} for stage {stage_entry.get('stage')}: {artifact_path}")
-        return pl.read_csv(absolute)
+        try:
+            return pl.read_csv(absolute)
+        except NoDataError:
+            return pl.DataFrame()
 
     def _artifact_path(self, stage_entry: dict[str, Any], artifact_name: str) -> str | None:
         artifact_path = stage_entry.get("artifacts", {}).get(artifact_name)

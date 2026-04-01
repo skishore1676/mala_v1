@@ -191,6 +191,39 @@ def test_queue_row_creation_and_chart_link_population(tmp_path: Path) -> None:
     assert row["latest_stage_reached"] == "M5"
 
 
+def test_refresh_queue_writes_empty_review_surface_for_zero_survivor_night(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    run_dir = tmp_path / "family_run"
+    run_dir.mkdir()
+    for name in [
+        "m1_top_candidates.csv",
+        "m2_gate_report.csv",
+        "m3_walk_forward_detail.csv",
+        "m4_holdout_summary.csv",
+        "m5_execution_mapping.csv",
+    ]:
+        (run_dir / name).write_text("\n", encoding="utf-8")
+    config = NightlyRegimeMatrixConfig(
+        research_control_root=str(tmp_path / "control"),
+        watchlist=["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL"],
+    )
+
+    artifacts = manager.refresh_queue(
+        run_dirs={"opening_drive_classifier": run_dir},
+        config=config,
+        run_date=date(2026, 4, 1),
+    )
+
+    assert artifacts.queue_path.exists()
+    assert artifacts.history_path.exists()
+    assert artifacts.workbook_path.exists()
+    assert (artifacts.review_bundle_dir / "m2_review.csv").exists()
+    assert (artifacts.review_bundle_dir / "execution_queue.csv").exists()
+    queue_df = pd.read_csv(artifacts.queue_path)
+    assert queue_df.empty
+    assert "candidate_key" in queue_df.columns
+
+
 def test_repeated_nightly_survivor_merge_updates_observation_fields(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     existing = [

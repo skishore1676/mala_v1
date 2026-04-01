@@ -90,6 +90,8 @@ Important review artifacts there:
 - `review_bundle/charts_index.csv`
 - `charts/<candidate_key>.html`
 
+Even on an all-clear night with no M2 survivors, the queue/history/workbook/review-bundle files should still be written so the operator sees an explicit empty review surface instead of a missing control plane.
+
 ## Queue Semantics
 
 Each queue row represents one stable candidate identity built from:

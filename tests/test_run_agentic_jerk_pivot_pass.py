@@ -51,3 +51,53 @@ def test_run_m4_m5_uses_shared_holdout_contract(monkeypatch) -> None:
     assert holdout_detail.is_empty()
     assert holdout_summary.is_empty()
     assert execution_df.is_empty()
+
+
+def test_run_m1_and_m2_allow_zero_survivor_outcomes(monkeypatch) -> None:
+    module = _load_module()
+
+    monkeypatch.setattr(module, "build_jerk_pivot", lambda config: object())
+    monkeypatch.setattr(module, "run_walk_forward_for_strategies", lambda **kwargs: [])
+
+    m1_detail, m1_aggregate, m1_top = module.run_m1(
+        frames={"SPY": pl.DataFrame({"timestamp": [], "close": []})},
+        windows=[],
+        ratios=[1.0],
+        metrics=object(),
+        min_signals=1,
+        m1_cost_bps=8.0,
+        top_per_ticker=1,
+        configs=[
+            {
+                "vpoc_proximity_pct": 0.002,
+                "jerk_lookback": 10,
+                "volume_multiplier": 1.0,
+                "volume_ma_period": 20,
+                "use_volume_filter": False,
+                "use_time_filter": True,
+                "session_start": "09:35",
+                "session_end": "15:30",
+            }
+        ],
+    )
+
+    m2_combined, m2_gate_report, m2_promoted = module.run_m2(
+        frames={"SPY": pl.DataFrame({"timestamp": [], "close": []})},
+        windows=[],
+        ratios=[1.0],
+        metrics=object(),
+        min_signals=1,
+        cost_grid_bps=[5.0, 8.0],
+        top_candidates=pl.DataFrame(),
+        gate_min_oos_windows=1,
+        gate_min_oos_signals=1,
+        gate_min_pct_positive=0.5,
+        gate_min_exp_r=0.0,
+    )
+
+    assert m1_detail.is_empty()
+    assert m1_aggregate.is_empty()
+    assert m1_top.is_empty()
+    assert m2_combined.is_empty()
+    assert m2_gate_report.is_empty()
+    assert m2_promoted.is_empty()

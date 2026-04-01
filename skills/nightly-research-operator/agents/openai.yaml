@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nightly Research Operator"
+  short_description: "Runs the nightly scout and queue loop"
+  default_prompt: "Use $nightly-research-operator to run the nightly scout, update the review queue, and report any blockers."

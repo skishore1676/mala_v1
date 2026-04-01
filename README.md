@@ -319,6 +319,8 @@ That nightly loop:
 - executes approved follow-up actions under explicit nightly budget caps, and
 - writes a review workbook/CSV bundle for the next morning's inspection pass.
 
+Even when a night produces zero M2 survivors, the operator contract is still to publish an initialized queue/history/workbook surface rather than failing or leaving no review artifacts behind.
+
 Important defaults live in [config/nightly_regime_matrix.yaml](/Users/suman/kg_env/projects/mala_v1/config/nightly_regime_matrix.yaml).
 Operator details for the queue, review artifacts, and terminal-state rules live in [docs/nightly_regime_matrix.md](/Users/suman/kg_env/projects/mala_v1/docs/nightly_regime_matrix.md).
 

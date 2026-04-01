@@ -157,7 +157,7 @@ def run_m1(*, frames: dict[str, pl.DataFrame], windows, ratios: list[float], met
     detail_df = pl.DataFrame(detail_rows) if detail_rows else pl.DataFrame()
     aggregate_df = pl.DataFrame(aggregate_rows) if aggregate_rows else pl.DataFrame()
     if aggregate_df.is_empty():
-        raise RuntimeError("M1 produced no aggregate rows")
+        return detail_df, aggregate_df, pl.DataFrame()
 
     ranked_df = (
         aggregate_df
@@ -186,8 +186,6 @@ def run_m1(*, frames: dict[str, pl.DataFrame], windows, ratios: list[float], met
         top_rows.extend(subset.head(top_per_ticker).iter_rows(named=True))
 
     top_df = pl.DataFrame(top_rows) if top_rows else pl.DataFrame()
-    if top_df.is_empty():
-        raise RuntimeError("No top candidates selected from M1")
     return detail_df, aggregate_df, top_df
 
 
@@ -230,7 +228,7 @@ def run_m2(*, frames: dict[str, pl.DataFrame], windows, ratios: list[float], met
             convergence_frames.append(pl.DataFrame(rows))
 
     if not convergence_frames:
-        raise RuntimeError("M2 produced no convergence rows")
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
 
     combined_df = pl.concat(convergence_frames, how="vertical")
     gate_report = build_gate_report(
