@@ -228,3 +228,39 @@ strategy_families:
         bhiksha_path: strategy.params.session_end
         type: hh:mm
         description: Latest ET time when the strategy may emit a signal.
+
+  elastic_band_reversion:
+    summary: >
+      Mean-reversion strategy that looks for large stretch away from the 4-hour
+      VPOC, combined with short-horizon exhaustion, before snapping back.
+    replayable_entry: true
+    replayable_strategy_exit: false
+    entry_logic:
+      long: Price is deeply below VPOC on a stretch z-score basis, velocity is negative, and optional jerk and directional-mass confirmations agree.
+      short: Price is deeply above VPOC on a stretch z-score basis, velocity is positive, and optional jerk and directional-mass confirmations agree.
+    exit_logic:
+      long:
+        - No strategy-managed exit is currently implemented in Bhiksha.
+      short:
+        - No strategy-managed exit is currently implemented in Bhiksha.
+    parameters:
+      - id: z_score_threshold
+        bhiksha_path: strategy.params.z_score_threshold
+        type: float
+        description: Minimum absolute stretch z-score required before a reversion setup is valid.
+      - id: z_score_window
+        bhiksha_path: strategy.params.z_score_window
+        type: integer
+        description: Rolling window used to normalize the VPOC stretch into a z-score.
+      - id: kinematic_periods_back
+        bhiksha_path: strategy.params.kinematic_periods_back
+        type: integer
+        description: Number of bars used to derive the internal velocity and jerk confirmations.
+      - id: use_directional_mass
+        bhiksha_path: strategy.params.use_directional_mass
+        type: boolean
+        description: Enables or disables the directional-mass confirmation gate.
+      - id: use_jerk_confirmation
+        bhiksha_path: strategy.params.use_jerk_confirmation
+        type: boolean
+        description: Enables or disables the jerk-sign confirmation gate.

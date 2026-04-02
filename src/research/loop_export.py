@@ -54,6 +54,22 @@ _SUPPORTED_EXECUTION_PRESETS: dict[str, dict[str, Any]] = {
         "min_open_interest": 100,
         "max_bid_ask_spread_pct": 0.20,
     },
+    "elastic_band_reversion": {
+        "profile": "single_leg_long_premium_v1",
+        "shadow_only": True,
+        "option_mapping": {
+            "long_signal": "CALL",
+            "short_signal": "PUT",
+        },
+        "dte_min": 7,
+        "dte_max": 21,
+        "target_abs_delta_min": 0.30,
+        "target_abs_delta_max": 0.50,
+        "entry_window_start_et": "09:45",
+        "entry_window_end_et": "14:30",
+        "min_open_interest": 100,
+        "max_bid_ask_spread_pct": 0.20,
+    },
 }
 
 _SUPPORTED_RISK_PRESETS: dict[str, dict[str, Any]] = {
@@ -68,6 +84,12 @@ _SUPPORTED_RISK_PRESETS: dict[str, dict[str, Any]] = {
         "max_trade_premium_usd": 300,
         "hard_flat_time_et": "15:55",
         "stop_loss_pct": 0.35,
+    },
+    "elastic_band_reversion": {
+        "profile": "conservative_day1",
+        "max_trade_premium_usd": 300,
+        "hard_flat_time_et": "15:55",
+        "stop_loss_pct": 0.45,
     },
 }
 
@@ -87,6 +109,15 @@ _SUPPORTED_EXIT_PRESETS: dict[str, dict[str, Any]] = {
         "use_profit_target": True,
         "profit_target_multiple": 2.0,
         "stop_loss_pct": 0.35,
+        "stop_to_breakeven_after_r_multiple": None,
+        "hard_flat_time_et": "15:55",
+    },
+    "elastic_band_reversion": {
+        "profile": "elastic_band_exit_v1",
+        "use_algorithmic_exit": False,
+        "use_profit_target": False,
+        "profit_target_multiple": None,
+        "stop_loss_pct": 0.45,
         "stop_to_breakeven_after_r_multiple": None,
         "hard_flat_time_et": "15:55",
     },
@@ -310,7 +341,11 @@ class LoopArtifactExporter:
 
             summary_row = self._matching_summary_row(m4_summary, row)
             detail_rows = self._matching_detail_rows(m4_detail, row)
-            required_capabilities = self._required_capabilities(descriptor.strategy_key)
+            required_capabilities = (
+                self._required_capabilities(descriptor.strategy_key)
+                if surface_class == "proposed"
+                else []
+            )
 
             source = {
                 "run_date": _stage_run_date(m5_entry),
@@ -331,13 +366,14 @@ class LoopArtifactExporter:
                     "horizon": "intraday",
                     "strategy_display_name": strategy_name,
                     "ranking_score": ranking_score,
-                    "required_bhiksha_capabilities": required_capabilities,
                     "m5_structure": row.get("structure"),
                     "m5_delta_plan": row.get("delta_plan"),
                     "m5_profit_take": row.get("profit_take"),
                     "m5_risk_rule": row.get("risk_rule"),
                 },
             }
+            if required_capabilities:
+                manifest["source"]["metadata"]["required_bhiksha_capabilities"] = required_capabilities
             evidence = {
                 "strategy_display_name": strategy_name,
                 "strategy_params": strategy_params,

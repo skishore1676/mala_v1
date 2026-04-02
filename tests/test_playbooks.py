@@ -119,7 +119,8 @@ def test_augment_playbook_catalog_from_queue_adds_first_class_records(tmp_path: 
     payload = json.loads(catalog_path.read_text(encoding="utf-8"))
     assert payload["playbook_count"] == 1
     assert payload["playbooks"][0]["playbook_id"].startswith("elastic_band_reversion_nvda_long_")
-    assert payload["playbooks"][0]["automation_status"] == "manual_research_only"
+    assert payload["playbooks"][0]["automation_status"] == "shadow_ready"
+    assert payload["playbooks"][0]["bhiksha_compatibility"]["supported"] is True
     assert payload["playbooks"][0]["bionic_ready"] is False
     projection_rows = _read_csv_rows(tmp_path / "playbook_catalog.csv")
     assert projection_rows[0]["symbol"] == "NVDA"

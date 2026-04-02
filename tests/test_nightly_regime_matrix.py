@@ -131,7 +131,7 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     assert "playbook_count" in playbook_catalog
     assert "playbooks" in playbook_catalog
     assert playbook_catalog["contexts"]["TSLA|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_with_survivors"
-    assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["proposed_candidates"]
+    assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["supported_candidates"]
     assert playbook_catalog["contexts"]["TSLA|bearish_mean_reversion_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
 
 

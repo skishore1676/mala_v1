@@ -74,7 +74,7 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     assert candidates_payload["watchlist"] == ["IWM", "NVDA", "QQQ"]
     assert playbook_payload["watchlist"] == ["IWM", "NVDA", "QQQ"]
 
-    assert {candidate["surface_class"] for candidate in candidates_payload["candidates"]} == {"supported", "proposed"}
+    assert {candidate["surface_class"] for candidate in candidates_payload["candidates"]} == {"supported"}
 
     market_candidate = next(
         candidate for candidate in candidates_payload["candidates"] if candidate["strategy_key"] == "market_impulse"
@@ -91,12 +91,12 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     elastic_candidate = next(
         candidate for candidate in candidates_payload["candidates"] if candidate["strategy_key"] == "elastic_band_reversion"
     )
-    assert elastic_candidate["automation_status"] == "manual_research_only"
+    assert elastic_candidate["automation_status"] == "blocked"
     assert elastic_candidate["bias_template"] == "bullish_mean_reversion_intraday"
-    assert elastic_candidate["manifest"]["execution"]["profile"] == "manual_research_only"
-    assert "dte_min" not in elastic_candidate["manifest"]["execution"]
-    assert "dte_max" not in elastic_candidate["manifest"]["execution"]
-    assert "Spread-aware execution stress and live monitoring" in elastic_candidate["manifest"]["source"]["metadata"]["required_bhiksha_capabilities"]
+    assert elastic_candidate["manifest"]["execution"]["profile"] == "single_leg_long_premium_v1"
+    assert elastic_candidate["manifest"]["execution"]["dte_min"] == 7
+    assert elastic_candidate["manifest"]["execution"]["dte_max"] == 21
+    assert "required_bhiksha_capabilities" not in elastic_candidate["manifest"]["source"]["metadata"]
 
     market_context = playbook_payload["contexts"]["QQQ|bearish_trend_intraday|intraday"]
     assert market_context["coverage_status"] == "researched_with_survivors"
@@ -107,8 +107,8 @@ def test_loop_export_builds_supported_and_proposed_artifacts(tmp_path: Path) -> 
     elastic_context = playbook_payload["contexts"]["NVDA|bullish_mean_reversion_intraday|intraday"]
     assert elastic_context["coverage_status"] == "researched_with_survivors"
     assert elastic_context["covered_by_strategy_families"] == ["elastic_band_reversion"]
-    assert elastic_context["supported_candidates"] == []
-    assert elastic_context["proposed_candidates"][0]["candidate_id"] == elastic_candidate["candidate_id"]
+    assert elastic_context["supported_candidates"][0]["candidate_id"] == elastic_candidate["candidate_id"]
+    assert elastic_context["proposed_candidates"] == []
 
     empty_trend_context = playbook_payload["contexts"]["IWM|bullish_trend_intraday|intraday"]
     assert empty_trend_context["coverage_status"] == "researched_no_survivors"
