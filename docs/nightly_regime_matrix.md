@@ -192,6 +192,13 @@ Inspect the newest nightly bundle:
 - `contexts`: the broad coverage matrix for Bhiksha/import compatibility
 - `playbooks`: first-class validated playbook records compiled from full survivors
 
+For the Bionic loop, a playbook is only `bionic_ready` when it includes:
+
+- an optimized `thesis_exit_*` block anchored to the underlying
+- a `catastrophe_exit_*` block that Bhiksha can enforce on the option position
+
+An older M5 survivor that only has the family preset exit but no `m5_exit_optimization.json` remains research-valid, but the translator will not arm it for Bhiksha.
+
 `playbook_catalog.csv` is the flat operator projection.
 
 ### 7. Export your bias sheet and run the deterministic router

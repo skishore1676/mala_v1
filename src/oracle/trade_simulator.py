@@ -152,6 +152,42 @@ class FixedRewardRiskExitPolicy(ExitPolicy):
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class FixedPercentRewardRiskExitPolicy(ExitPolicy):
+    """Exit at a fixed percent stop and reward multiple from entry."""
+
+    stop_loss_pct: float
+    reward_multiple: float = 2.0
+    policy_name: str = "fixed_rr_underlying"
+
+    def __post_init__(self) -> None:
+        if self.stop_loss_pct <= 0:
+            raise ValueError("stop_loss_pct must be positive for fixed_rr_underlying exits.")
+        if self.reward_multiple <= 0:
+            raise ValueError("reward_multiple must be positive for fixed_rr_underlying exits.")
+
+    def should_exit(self, trade: OpenTrade, bar: BarSnapshot) -> ExitDecision | None:
+        risk_distance = trade.entry_price * self.stop_loss_pct
+        reward_distance = risk_distance * self.reward_multiple
+
+        if trade.direction == "long":
+            stop_price = trade.entry_price - risk_distance
+            target_price = trade.entry_price + reward_distance
+            if bar.low <= stop_price:
+                return ExitDecision(reason="stop_loss_underlying", exit_price=stop_price)
+            if bar.high >= target_price:
+                return ExitDecision(reason="take_profit_underlying", exit_price=target_price)
+            return None
+
+        stop_price = trade.entry_price + risk_distance
+        target_price = trade.entry_price - reward_distance
+        if bar.high >= stop_price:
+            return ExitDecision(reason="stop_loss_underlying", exit_price=stop_price)
+        if bar.low <= target_price:
+            return ExitDecision(reason="take_profit_underlying", exit_price=target_price)
+        return None
+
+
 @dataclass
 class SimulationResult:
     """Aggregate results from the trade simulation."""

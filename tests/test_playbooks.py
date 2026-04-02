@@ -60,10 +60,13 @@ def test_build_playbook_records_from_full_survivor_queue_rows(tmp_path: Path) ->
     assert record.lifecycle_status == PLAYBOOK_STATUS_ACTIVE
     assert record.bias_template == "bearish_trend_intraday"
     assert record.execution_mapping["profile"] == "single_leg_long_premium_v1"
-    assert record.exit_params["profile"] == "market_impulse_exit_v1"
+    assert record.exit_params["thesis_exit_policy"] == "trailing_vma_underlying"
+    assert record.thesis_exit_policy == "trailing_vma_underlying"
+    assert record.catastrophe_exit_params["stop_loss_pct"] == 0.45
     assert record.deployment_manifest_template["strategy"]["params"]["direction"] == "short"
     assert record.is_full_m1_m5_survivor is True
     assert record.bhiksha_compatibility["supported"] is True
+    assert record.bionic_ready is True
 
 
 def test_augment_playbook_catalog_from_queue_adds_first_class_records(tmp_path: Path) -> None:
@@ -117,6 +120,7 @@ def test_augment_playbook_catalog_from_queue_adds_first_class_records(tmp_path: 
     assert payload["playbook_count"] == 1
     assert payload["playbooks"][0]["playbook_id"].startswith("elastic_band_reversion_nvda_long_")
     assert payload["playbooks"][0]["automation_status"] == "manual_research_only"
+    assert payload["playbooks"][0]["bionic_ready"] is False
     projection_rows = _read_csv_rows(tmp_path / "playbook_catalog.csv")
     assert projection_rows[0]["symbol"] == "NVDA"
 
@@ -211,6 +215,7 @@ def test_load_bias_inputs_sheet_and_route_bias_inputs(tmp_path: Path) -> None:
     assert manifest_path.exists()
     manifest_text = manifest_path.read_text(encoding="utf-8")
     assert "max_trade_premium_usd: 500.0" in manifest_text
+    assert "thesis_exit_policy: trailing_vma_underlying" in manifest_text
     assert selections[0].status == "armed"
     assert selections[1].status == "no_match"
 
@@ -295,6 +300,7 @@ def test_route_bias_inputs_outputs_bhiksha_compatible_manifest(tmp_path: Path) -
         validated = DeploymentManifest.model_validate(manifest_payload)
         assert validated.symbol == "TSLA"
         assert validated.risk.max_trade_premium_usd == 1000.0
+        assert validated.exit.thesis_exit_policy == "fixed_rr_underlying"
     finally:
         sys.path.remove(str(bhiksha_root))
 
@@ -493,6 +499,42 @@ def _write_full_survivor_artifacts(
         m5_row = f"{ticker},{strategy},{direction},3.0,120,true,1.25,42,0.5476,0.1521,42.0,-0.020538,-0.310285,-0.021474,0.25991,0.45275,-13.03198,-0.90191,10.916207,7.684631,call_debit_spread,7-21,long 0.30-0.45 / short 0.10-0.25,09:45-14:30,50-70% spread value,hard stop at -45% premium\n"
     (artifact_dir / "m4_holdout_summary.csv").write_text(m4_header + m4_row, encoding="utf-8")
     (artifact_dir / "m5_execution_mapping.csv").write_text(m5_header + m5_row, encoding="utf-8")
+    if strategy.startswith("Market Impulse"):
+        optimization = {
+            "generated_at": "2026-04-01T00:00:00+00:00",
+            "strategy_key": "market_impulse",
+            "symbol": ticker,
+            "direction": direction,
+            "selection_metric": "expectancy",
+            "selection_slice": {"holdout_start": "2026-03-01", "holdout_end": "2026-03-31"},
+            "selected_policy_name": "trailing_vma_underlying:vma_10",
+            "thesis_exit_anchor": "underlying",
+            "thesis_exit_policy": "trailing_vma_underlying",
+            "thesis_exit_params": {"vma_col": "vma_10"},
+            "catastrophe_exit_anchor": "option_premium",
+            "catastrophe_exit_params": {"stop_loss_pct": 0.45, "hard_flat_time_et": "15:55"},
+            "selected_metrics": {"trade_count": 12, "expectancy": 0.41, "win_rate": 0.58, "profit_factor": 1.4, "total_pnl": 4.9},
+            "candidate_policies": [],
+        }
+        (artifact_dir / "m5_exit_optimization.json").write_text(json.dumps(optimization, indent=2) + "\n", encoding="utf-8")
+    elif strategy.startswith("Jerk-Pivot Momentum"):
+        optimization = {
+            "generated_at": "2026-04-01T00:00:00+00:00",
+            "strategy_key": "jerk_pivot_momentum",
+            "symbol": ticker,
+            "direction": direction,
+            "selection_metric": "expectancy",
+            "selection_slice": {"holdout_start": "2026-03-01", "holdout_end": "2026-03-31"},
+            "selected_policy_name": "fixed_rr_underlying:0.0035x1.50",
+            "thesis_exit_anchor": "underlying",
+            "thesis_exit_policy": "fixed_rr_underlying",
+            "thesis_exit_params": {"stop_loss_underlying_pct": 0.0035, "take_profit_underlying_r_multiple": 1.5},
+            "catastrophe_exit_anchor": "option_premium",
+            "catastrophe_exit_params": {"stop_loss_pct": 0.35, "hard_flat_time_et": "15:55"},
+            "selected_metrics": {"trade_count": 9, "expectancy": 0.22, "win_rate": 0.56, "profit_factor": 1.3, "total_pnl": 2.0},
+            "candidate_policies": [],
+        }
+        (artifact_dir / "m5_exit_optimization.json").write_text(json.dumps(optimization, indent=2) + "\n", encoding="utf-8")
 
 
 def _full_survivor_row(

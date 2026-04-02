@@ -18,6 +18,7 @@ from src.config import PROJECT_ROOT
 from src.newton.engine import PhysicsEngine
 from src.oracle.metrics import MetricsCalculator
 from src.oracle.monte_carlo import ExecutionStressConfig
+from src.research.exit_optimizer import optimize_underlying_exit, write_exit_optimization_result
 from src.research.models import StrategyCatalogEntry
 from src.research.registry import ResearchRegistry
 from src.research.stages import (
@@ -549,6 +550,22 @@ class HumanReviewQueueManager:
             stress_cfg=ExecutionStressConfig(bootstrap_iters=config.defaults.bootstrap_iters),
         ) if not m5_candidates.is_empty() else []
         m5_detail = pl.DataFrame(m5_rows) if m5_rows else pl.DataFrame()
+        if not m5_detail.is_empty():
+            exit_optimization = optimize_underlying_exit(
+                strategy_key=_strategy_key_for_name(str(row["strategy"])),
+                symbol=str(row["ticker"]),
+                direction=str(row["direction"]),
+                strategy=strategy,
+                enriched_frame=ticker_frames[row["ticker"]],
+                holdout_start=config.defaults.holdout_start,
+                holdout_end=config.defaults.holdout_end,
+                catastrophe_exit_params=_catastrophe_exit_defaults(m5_detail.row(0, named=True)),
+            )
+            if exit_optimization is not None:
+                write_exit_optimization_result(
+                    exit_optimization,
+                    path=artifact_dir / "m5_exit_optimization.json",
+                )
 
         _write_frame_if_not_empty(m3_detail, artifact_dir / "m3_walk_forward_detail.csv")
         _write_frame_if_not_empty(m4_detail, artifact_dir / "m4_holdout_detail.csv")
@@ -1356,6 +1373,31 @@ def _latest_stage_state(
     if passes_m1:
         return "M1", "selected_for_convergence"
     return "M0", "unseen"
+
+
+def _strategy_key_for_name(strategy_name: str) -> str:
+    return {
+        "Market Impulse (Cross & Reclaim)": "market_impulse",
+        "Jerk-Pivot Momentum (tight)": "jerk_pivot_momentum",
+        "Elastic Band Reversion": "elastic_band_reversion",
+        "Opening Drive Classifier": "opening_drive_classifier",
+    }.get(strategy_name, strategy_name.lower().replace(" ", "_"))
+
+
+def _catastrophe_exit_defaults(m5_row: dict[str, Any]) -> dict[str, Any]:
+    risk_rule = str(m5_row.get("risk_rule") or "").lower()
+    stop_loss_pct = 0.45
+    if "-35%" in risk_rule:
+        stop_loss_pct = 0.35
+    elif "-45%" in risk_rule:
+        stop_loss_pct = 0.45
+    return {
+        "stop_loss_pct": stop_loss_pct,
+        "hard_flat_time_et": "15:55",
+        "use_profit_target": False,
+        "profit_target_multiple": None,
+        "stop_to_breakeven_after_r_multiple": None,
+    }
 
 
 def _read_optional_csv(run_dir: Path, *names: str) -> pl.DataFrame:

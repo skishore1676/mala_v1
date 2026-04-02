@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
 from src.config import PROJECT_ROOT
+from src.research.exit_optimizer import load_exit_optimization_result
 from src.research.google_sheets import GoogleSheetTableClient, spreadsheet_id_from_url
 from src.research.loop_contracts import PLAYBOOK_CATALOG_CONTRACT_NAME, build_contract_metadata
 from src.research.loop_export import (
@@ -85,6 +86,11 @@ class PlaybookRecord(BaseModel):
     surface_class: str
     entry_params: dict[str, Any] = Field(default_factory=dict)
     exit_params: dict[str, Any] = Field(default_factory=dict)
+    thesis_exit_anchor: str | None = None
+    thesis_exit_policy: str | None = None
+    thesis_exit_params: dict[str, Any] = Field(default_factory=dict)
+    catastrophe_exit_anchor: str | None = None
+    catastrophe_exit_params: dict[str, Any] = Field(default_factory=dict)
     execution_mapping: dict[str, Any] = Field(default_factory=dict)
     risk_mapping: dict[str, Any] = Field(default_factory=dict)
     deployment_manifest_template: dict[str, Any] = Field(default_factory=dict)
@@ -103,6 +109,7 @@ class PlaybookRecord(BaseModel):
     stress_metrics: dict[str, Any] = Field(default_factory=dict)
     last_validated_date: str
     research_slice_id: str | None = None
+    bionic_ready: bool = False
     source: dict[str, Any] = Field(default_factory=dict)
     bhiksha_compatibility: dict[str, Any] = Field(default_factory=dict)
 
@@ -432,6 +439,9 @@ def build_armed_deployment_manifest(playbook: PlaybookRecord, bias: BiasInputRow
             "expectancy": playbook.expectancy,
             "confidence": playbook.confidence,
             "last_validated_date": playbook.last_validated_date,
+            "bionic_ready": playbook.bionic_ready,
+            "thesis_exit_policy": playbook.thesis_exit_policy,
+            "thesis_exit_anchor": playbook.thesis_exit_anchor,
         }
     )
     return manifest
@@ -508,6 +518,32 @@ def _playbook_from_queue_row(
             "queue_status": row.get("queue_status"),
         },
     }
+    exit_optimization_path = artifact_dir / "m5_exit_optimization.json"
+    exit_optimization = (
+        load_exit_optimization_result(exit_optimization_path)
+        if exit_optimization_path.exists()
+        else None
+    )
+    if exit_optimization is not None:
+        manifest.setdefault("exit", {})
+        manifest["exit"].update(
+            {
+                "use_algorithmic_exit": False,
+                "thesis_exit_anchor": exit_optimization.thesis_exit_anchor,
+                "thesis_exit_policy": exit_optimization.thesis_exit_policy,
+                "thesis_exit_params": json_ready(exit_optimization.thesis_exit_params),
+                "catastrophe_exit_anchor": exit_optimization.catastrophe_exit_anchor,
+                "catastrophe_exit_params": json_ready(exit_optimization.catastrophe_exit_params),
+                "stop_loss_pct": exit_optimization.catastrophe_exit_params.get(
+                    "stop_loss_pct",
+                    manifest["exit"].get("stop_loss_pct"),
+                ),
+                "hard_flat_time_et": exit_optimization.catastrophe_exit_params.get(
+                    "hard_flat_time_et",
+                    manifest["exit"].get("hard_flat_time_et"),
+                ),
+            }
+        )
     playbook_id = _build_playbook_id(
         strategy_key=strategy_key,
         symbol=str(row["ticker"]),
@@ -524,6 +560,8 @@ def _playbook_from_queue_row(
     expectancy = _maybe_float(m5_row.get("base_exp_r")) or _maybe_float(m4_row.get("mean_holdout_exp_r"))
     execution_robustness = _maybe_float(m5_row.get("mc_prob_positive_exp"))
     bhiksha_supported = surface_class == "supported"
+    has_optimized_exit = exit_optimization is not None
+    bionic_ready = bhiksha_supported and has_optimized_exit
     record = PlaybookRecord(
         playbook_id=playbook_id,
         strategy_key=strategy_key,
@@ -539,6 +577,22 @@ def _playbook_from_queue_row(
         surface_class=surface_class,
         entry_params={**strategy_params, "direction": str(row["direction"])},
         exit_params=json_ready(manifest["exit"]),
+        thesis_exit_anchor=exit_optimization.thesis_exit_anchor if exit_optimization is not None else None,
+        thesis_exit_policy=exit_optimization.thesis_exit_policy if exit_optimization is not None else None,
+        thesis_exit_params=(
+            json_ready(exit_optimization.thesis_exit_params) if exit_optimization is not None else {}
+        ),
+        catastrophe_exit_anchor=(
+            exit_optimization.catastrophe_exit_anchor if exit_optimization is not None else "option_premium"
+        ),
+        catastrophe_exit_params=(
+            json_ready(exit_optimization.catastrophe_exit_params)
+            if exit_optimization is not None
+            else {
+                "stop_loss_pct": manifest["exit"].get("stop_loss_pct"),
+                "hard_flat_time_et": manifest["exit"].get("hard_flat_time_et"),
+            }
+        ),
         execution_mapping=json_ready(manifest["execution"]),
         risk_mapping=json_ready(manifest["risk"]),
         deployment_manifest_template=json_ready(manifest),
@@ -575,6 +629,7 @@ def _playbook_from_queue_row(
         },
         last_validated_date=str(row.get("last_action_run_date") or row.get("last_seen_run_date") or ""),
         research_slice_id=_optional_text(row.get("research_slice_id")),
+        bionic_ready=bionic_ready,
         source={
             "queue_candidate_key": row.get("candidate_key"),
             "artifact_dir": str(artifact_dir),
@@ -582,11 +637,22 @@ def _playbook_from_queue_row(
             "config_signature": row.get("config_signature", ""),
             "m4_summary": _jsonable(m4_row),
             "m5_execution": _jsonable(m5_row),
+            "exit_optimization": (
+                exit_optimization.model_dump(mode="json") if exit_optimization is not None else None
+            ),
         },
         bhiksha_compatibility={
             "supported": bhiksha_supported,
+            "has_optimized_thesis_exit": has_optimized_exit,
+            "bionic_ready": bionic_ready,
             "required_capabilities": (
-                [] if bhiksha_supported else ["strategy_plugin_not_yet_implemented_in_bhiksha"]
+                []
+                if bionic_ready
+                else (
+                    ["optimized_underlying_thesis_exit_missing"]
+                    if bhiksha_supported
+                    else ["strategy_plugin_not_yet_implemented_in_bhiksha"]
+                )
             ),
         },
     )
@@ -646,6 +712,7 @@ def _write_playbook_projection_csv(path: Path, playbooks: list[PlaybookRecord]) 
             "direction": playbook.direction,
             "lifecycle_status": playbook.lifecycle_status,
             "automation_status": playbook.automation_status,
+            "bionic_ready": playbook.bionic_ready,
             "expectancy": playbook.expectancy,
             "confidence": playbook.confidence,
             "signal_count": playbook.signal_count,
@@ -697,7 +764,7 @@ def _select_playbook_for_bias(
     compatible = [
         candidate
         for candidate in active_candidates
-        if candidate.is_full_m1_m5_survivor and candidate.bhiksha_compatibility.get("supported", False)
+        if candidate.is_full_m1_m5_survivor and candidate.bhiksha_compatibility.get("bionic_ready", False)
     ]
     if not compatible:
         selection = TranslatorSelection(
