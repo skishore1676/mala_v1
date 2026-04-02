@@ -70,6 +70,22 @@ _SUPPORTED_EXECUTION_PRESETS: dict[str, dict[str, Any]] = {
         "min_open_interest": 100,
         "max_bid_ask_spread_pct": 0.20,
     },
+    "opening_drive_classifier": {
+        "profile": "single_leg_long_premium_v1",
+        "shadow_only": True,
+        "option_mapping": {
+            "long_signal": "CALL",
+            "short_signal": "PUT",
+        },
+        "dte_min": 0,
+        "dte_max": 7,
+        "target_abs_delta_min": 0.25,
+        "target_abs_delta_max": 0.45,
+        "entry_window_start_et": "09:55",
+        "entry_window_end_et": "11:30",
+        "min_open_interest": 100,
+        "max_bid_ask_spread_pct": 0.20,
+    },
 }
 
 _SUPPORTED_RISK_PRESETS: dict[str, dict[str, Any]] = {
@@ -90,6 +106,12 @@ _SUPPORTED_RISK_PRESETS: dict[str, dict[str, Any]] = {
         "max_trade_premium_usd": 300,
         "hard_flat_time_et": "15:55",
         "stop_loss_pct": 0.45,
+    },
+    "opening_drive_classifier": {
+        "profile": "conservative_day1",
+        "max_trade_premium_usd": 300,
+        "hard_flat_time_et": "15:55",
+        "stop_loss_pct": 0.40,
     },
 }
 
@@ -118,6 +140,15 @@ _SUPPORTED_EXIT_PRESETS: dict[str, dict[str, Any]] = {
         "use_profit_target": False,
         "profit_target_multiple": None,
         "stop_loss_pct": 0.45,
+        "stop_to_breakeven_after_r_multiple": None,
+        "hard_flat_time_et": "15:55",
+    },
+    "opening_drive_classifier": {
+        "profile": "opening_drive_exit_v1",
+        "use_algorithmic_exit": False,
+        "use_profit_target": False,
+        "profit_target_multiple": None,
+        "stop_loss_pct": 0.40,
         "stop_to_breakeven_after_r_multiple": None,
         "hard_flat_time_et": "15:55",
     },
@@ -202,10 +233,10 @@ _ALL_BIAS_TEMPLATES = (
 )
 
 _CONTEXT_FAMILY_MAP = {
-    "bullish_trend_intraday": ("market_impulse", "jerk_pivot_momentum"),
-    "bullish_mean_reversion_intraday": ("elastic_band_reversion",),
-    "bearish_trend_intraday": ("market_impulse", "jerk_pivot_momentum"),
-    "bearish_mean_reversion_intraday": ("elastic_band_reversion",),
+    "bullish_trend_intraday": ("market_impulse", "jerk_pivot_momentum", "opening_drive_classifier"),
+    "bullish_mean_reversion_intraday": ("elastic_band_reversion", "opening_drive_classifier"),
+    "bearish_trend_intraday": ("market_impulse", "jerk_pivot_momentum", "opening_drive_classifier"),
+    "bearish_mean_reversion_intraday": ("elastic_band_reversion", "opening_drive_classifier"),
 }
 
 
@@ -314,8 +345,12 @@ class LoopArtifactExporter:
             strategy_name = str(row["strategy"])
             descriptor = _strategy_descriptor(strategy_name)
             surface_class = self._classify_surface(descriptor.strategy_key)
-            bias_template = _bias_template(descriptor.strategy_key, str(row["direction"]))
             strategy_params = self._strategy_params(strategy_name, row)
+            bias_template = _bias_template(
+                descriptor.strategy_key,
+                str(row["direction"]),
+                strategy_params=strategy_params,
+            )
             manifest = self._build_manifest(
                 descriptor=descriptor,
                 symbol=str(row["ticker"]),
@@ -704,11 +739,31 @@ def _strategy_descriptor(strategy_name: str) -> _StrategyDescriptor:
     raise ValueError(f"Unsupported strategy for loop export: {strategy_name}")
 
 
-def _bias_template(strategy_key: str, direction: str) -> str:
+def _bias_template(
+    strategy_key: str,
+    direction: str,
+    *,
+    strategy_params: dict[str, Any] | None = None,
+) -> str:
+    if strategy_key == "opening_drive_classifier":
+        return _opening_drive_bias_template(direction, strategy_params or {})
     try:
         return _BIAS_CONTEXTS[(strategy_key, direction)]
     except KeyError as exc:
         raise ValueError(f"No bias template mapping for {strategy_key} {direction}") from exc
+
+
+def _opening_drive_bias_template(direction: str, strategy_params: dict[str, Any]) -> str:
+    enable_continue = bool(strategy_params.get("enable_continue", True))
+    enable_fail = bool(strategy_params.get("enable_fail", True))
+    if enable_continue and not enable_fail:
+        return "bullish_trend_intraday" if direction == "long" else "bearish_trend_intraday"
+    if enable_fail and not enable_continue:
+        return "bullish_mean_reversion_intraday" if direction == "long" else "bearish_mean_reversion_intraday"
+    # Mixed-mode Opening Drive deployments can express both continuation and failure.
+    # Until we split those into explicit playbook variants, default them to the
+    # continuation lane so they still export into a live-capable surface.
+    return "bullish_trend_intraday" if direction == "long" else "bearish_trend_intraday"
 
 
 def _stage_run_date(stage_entry: dict[str, Any]) -> str:

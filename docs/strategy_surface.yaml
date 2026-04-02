@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at: "2026-03-31"
+updated_at: "2026-04-01"
 owner: shared
 scope: >
   Strict shared contract for strategy surfaces currently executable in Bhiksha
@@ -264,3 +264,76 @@ strategy_families:
         bhiksha_path: strategy.params.use_jerk_confirmation
         type: boolean
         description: Enables or disables the jerk-sign confirmation gate.
+
+  opening_drive_classifier:
+    summary: >
+      Opening-auction strategy that classifies the first minutes after the open
+      and then trades either continuation through the opening range or failure
+      back through the opening midpoint.
+    replayable_entry: true
+    replayable_strategy_exit: false
+    entry_logic:
+      long: An opening drive up can continue through the opening high, or an opening drive down can fail back above the opening midpoint, with acceleration confirmation and optional jerk/volume/directional-mass filters.
+      short: An opening drive down can continue through the opening low, or an opening drive up can fail back below the opening midpoint, with acceleration confirmation and optional jerk/volume/directional-mass filters.
+    exit_logic:
+      long:
+        - No strategy-managed exit is currently implemented in Bhiksha.
+      short:
+        - No strategy-managed exit is currently implemented in Bhiksha.
+    parameters:
+      - id: opening_window_minutes
+        bhiksha_path: strategy.params.opening_window_minutes
+        type: integer
+        description: Number of minutes after the market open used to classify the opening drive.
+      - id: entry_start_offset_minutes
+        bhiksha_path: strategy.params.entry_start_offset_minutes
+        type: integer
+        description: Minutes after the market open before entry signals are allowed.
+      - id: entry_end_offset_minutes
+        bhiksha_path: strategy.params.entry_end_offset_minutes
+        type: integer
+        description: Final minutes-after-open cutoff for Opening Drive entries.
+      - id: min_drive_return_pct
+        bhiksha_path: strategy.params.min_drive_return_pct
+        type: float
+        description: Minimum opening-window return required to classify the drive as up or down.
+      - id: breakout_buffer_pct
+        bhiksha_path: strategy.params.breakout_buffer_pct
+        type: float
+        description: Optional percentage buffer above the opening high or below the opening low before continuation entries are valid.
+      - id: kinematic_periods_back
+        bhiksha_path: strategy.params.kinematic_periods_back
+        type: integer
+        description: Number of bars used to derive the internal acceleration and jerk confirmations.
+      - id: use_volume_filter
+        bhiksha_path: strategy.params.use_volume_filter
+        type: boolean
+        description: Enables or disables the opening-volume expansion gate.
+      - id: volume_multiplier
+        bhiksha_path: strategy.params.volume_multiplier
+        type: float
+        description: Minimum multiple of opening-window average volume required to pass the volume gate.
+      - id: use_directional_mass
+        bhiksha_path: strategy.params.use_directional_mass
+        type: boolean
+        description: Enables or disables the directional-mass confirmation gate.
+      - id: use_jerk_confirmation
+        bhiksha_path: strategy.params.use_jerk_confirmation
+        type: boolean
+        description: Enables or disables the jerk-sign confirmation gate.
+      - id: allow_long
+        bhiksha_path: strategy.params.allow_long
+        type: boolean
+        description: Enables or disables long-side entries for the deployment.
+      - id: allow_short
+        bhiksha_path: strategy.params.allow_short
+        type: boolean
+        description: Enables or disables short-side entries for the deployment.
+      - id: enable_continue
+        bhiksha_path: strategy.params.enable_continue
+        type: boolean
+        description: Enables continuation entries that expand beyond the opening range.
+      - id: enable_fail
+        bhiksha_path: strategy.params.enable_fail
+        type: boolean
+        description: Enables failure entries that revert through the opening midpoint.

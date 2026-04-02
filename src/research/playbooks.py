@@ -554,7 +554,11 @@ def _playbook_from_queue_row(
     )
     time_start, time_end = _manifest_window(manifest)
     lifecycle_status = _lifecycle_status(row)
-    bias_template = _bias_template(strategy_key, str(row["direction"]))
+    bias_template = _bias_template(
+        strategy_key,
+        str(row["direction"]),
+        strategy_params=strategy_params,
+    )
     confidence = _maybe_float(row.get("m2_mean_test_confidence")) or _maybe_float(row.get("m1_avg_test_confidence"))
     signal_count = _maybe_int(m5_row.get("holdout_trades")) or _maybe_int(row.get("m1_oos_signals"))
     expectancy = _maybe_float(m5_row.get("base_exp_r")) or _maybe_float(m4_row.get("mean_holdout_exp_r"))

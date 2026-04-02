@@ -233,6 +233,72 @@ def test_loop_export_allows_m2_only_research_manifests(tmp_path: Path) -> None:
     assert playbook_payload["contexts"]["SPY|bearish_trend_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
 
 
+def test_loop_export_supports_opening_drive_continue_surface(tmp_path: Path) -> None:
+    run_dir = tmp_path / "opening_drive_run"
+    run_dir.mkdir()
+
+    _write_run(
+        run_dir,
+        strategy="Opening Drive Classifier",
+        m5_decision="promote",
+        m4_summary_header=(
+            "ticker,strategy,direction,opening_window_minutes,entry_start_offset_minutes,entry_end_offset_minutes,"
+            "min_drive_return_pct,breakout_buffer_pct,kinematic_periods_back,use_volume_filter,volume_multiplier,"
+            "use_directional_mass,use_jerk_confirmation,enable_continue,enable_fail,observed_cost_points,"
+            "min_holdout_signals,min_holdout_exp_r,mean_holdout_exp_r,passes_all_cost_gates,passes_holdout,decision\n"
+        ),
+        m4_summary_row=(
+            "SPY,Opening Drive Classifier,long,25,30,120,0.0015,0.0,3,true,1.2,true,true,true,false,"
+            "3,44,0.201,0.237,true,true,promote_to_execution_mapping\n"
+        ),
+        m4_detail_header=(
+            "ticker,strategy,direction,opening_window_minutes,entry_start_offset_minutes,entry_end_offset_minutes,"
+            "min_drive_return_pct,breakout_buffer_pct,kinematic_periods_back,use_volume_filter,volume_multiplier,"
+            "use_directional_mass,use_jerk_confirmation,enable_continue,enable_fail,cost_bps,selected_ratio,"
+            "calib_signals,calib_exp_r,holdout_signals,holdout_confidence,holdout_exp_r,passes_cost_gate\n"
+        ),
+        m4_detail_rows=[
+            "SPY,Opening Drive Classifier,long,25,30,120,0.0015,0.0,3,true,1.2,true,true,true,false,5.0,1.5,210,0.084,44,0.57,0.244,true\n",
+        ],
+        m5_detail_header=(
+            "ticker,strategy,direction,opening_window_minutes,entry_start_offset_minutes,entry_end_offset_minutes,"
+            "min_drive_return_pct,breakout_buffer_pct,kinematic_periods_back,use_volume_filter,volume_multiplier,"
+            "use_directional_mass,use_jerk_confirmation,enable_continue,enable_fail,selected_ratio,holdout_trades,"
+            "holdout_win_rate,base_exp_r,trades,mc_exp_r_mean,mc_exp_r_p05,mc_exp_r_p50,mc_exp_r_p95,"
+            "mc_prob_positive_exp,mc_total_r_p05,mc_total_r_p50,mc_total_r_p95,mc_max_dd_p50,structure,dte,"
+            "delta_plan,entry_window_et,profit_take,risk_rule\n"
+        ),
+        m5_detail_row=(
+            "SPY,Opening Drive Classifier,long,25,30,120,0.0015,0.0,3,true,1.2,true,true,true,false,1.5,44,0.55,"
+            "0.231,44.0,0.182,-0.01,0.188,0.36,0.91,-1.2,8.2,17.5,5.4,call_single,0-7,long 0.25-0.45,"
+            "09:55-11:30,let_winner_run,hard stop at -40% premium\n"
+        ),
+    )
+
+    exporter = LoopArtifactExporter()
+    candidates_path, playbook_path = exporter.export_runs(
+        [run_dir],
+        out_dir=tmp_path / "loop_artifacts",
+        watchlist=["SPY"],
+        enabled_strategy_families=["opening_drive_classifier"],
+    )
+
+    candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+    playbook_payload = json.loads(playbook_path.read_text(encoding="utf-8"))
+
+    candidate = candidates_payload["candidates"][0]
+    assert candidate["strategy_key"] == "opening_drive_classifier"
+    assert candidate["surface_class"] == "supported"
+    assert candidate["automation_status"] == "shadow_ready"
+    assert candidate["bias_template"] == "bullish_trend_intraday"
+    assert candidate["manifest"]["execution"]["entry_window_start_et"] == "09:55"
+    assert candidate["manifest"]["exit"]["profile"] == "opening_drive_exit_v1"
+
+    context = playbook_payload["contexts"]["SPY|bullish_trend_intraday|intraday"]
+    assert context["coverage_status"] == "researched_with_survivors"
+    assert context["covered_by_strategy_families"] == ["opening_drive_classifier"]
+
+
 def _write_run(
     run_dir: Path,
     *,
