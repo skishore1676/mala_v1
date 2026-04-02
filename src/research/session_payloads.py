@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from src.config import PROJECT_ROOT
 from src.research.google_sheets import GoogleSheetTableClient, spreadsheet_id_from_url
-from src.research.playbooks import BiasInputRow, _bias_row_from_sheet_row, route_bias_rows
+from src.research.playbooks import BiasInputRow, _bias_row_from_sheet_row, resolve_playbook_catalog_path, route_bias_rows
 
 
 ACTIVE_SESSION_CONTRACT_NAME = "active_session"
@@ -118,7 +118,7 @@ def compile_active_session_from_rows(
     *,
     biases: list[BiasInputRow],
     manual_entries: list[ManualEntryRow],
-    playbook_catalog_path: str | Path,
+    playbook_catalog_path: str | Path | None,
     out_dir: str | Path,
     bias_source: str = "in_memory",
     manual_source: str = "in_memory",
@@ -127,11 +127,12 @@ def compile_active_session_from_rows(
 ) -> tuple[Path, Path, dict[str, Any]]:
     target_dir = Path(out_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_catalog = resolve_playbook_catalog_path(playbook_catalog_path)
 
     routing_dir = target_dir / "bias_routing"
     routing_report_path, armed_payloads_path, selections, _ = route_bias_rows(
         biases=biases,
-        playbook_catalog_path=playbook_catalog_path,
+        playbook_catalog_path=resolved_catalog,
         out_dir=routing_dir,
         bias_source=bias_source,
     )
@@ -187,7 +188,7 @@ def compile_active_session_from_rows(
         "source": {
             "bionic": bias_source,
             "manual": manual_source,
-            "playbook_catalog_path": str(Path(playbook_catalog_path).resolve()),
+            "playbook_catalog_path": str(resolved_catalog.resolve()),
             "routing_report_path": str(routing_report_path.resolve()),
         },
         "summary": {
@@ -230,7 +231,7 @@ def compile_active_session_from_google_sheets(
     manual_spreadsheet_id: str,
     manual_sheet_name: str,
     credentials_path: str | Path,
-    playbook_catalog_path: str | Path,
+    playbook_catalog_path: str | Path | None,
     out_dir: str | Path,
     update_bionic_sheet: bool = True,
     live_authorized: bool = False,

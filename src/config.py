@@ -16,6 +16,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+PLAYBOOKS_DIR = DATA_DIR / "playbooks"
+PLAYBOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _resolve_env_file() -> str | None:
@@ -69,6 +71,22 @@ class Settings(BaseSettings):
     bhiksha_root: str = Field(
         default="../bhiksha",
         description="Path to the sibling Bhiksha repo used for generated deployment publishing.",
+    )
+    master_playbook_sheet_id: str = Field(
+        default="",
+        description="Spreadsheet id or full URL for the Master_Playbook_Catalog Google Sheet tab.",
+    )
+    master_playbook_sheet_name: str = Field(
+        default="Master_Playbook_Catalog",
+        description="Worksheet name for the mirrored master playbook catalog.",
+    )
+    master_playbook_catalog_path: str = Field(
+        default="data/playbooks/master_playbook_catalog.json",
+        description="Canonical local path for the master playbook catalog JSON.",
+    )
+    master_playbook_projection_path: str = Field(
+        default="data/playbooks/master_playbook_catalog.csv",
+        description="Canonical local path for the master playbook catalog CSV projection.",
     )
 
     # ── Data Pipeline Defaults ───────────────────────────────────────────

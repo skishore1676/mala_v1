@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import PROJECT_ROOT, settings
 from src.research import (
     compile_active_session_from_google_sheets,
+    default_master_playbook_catalog_path,
     publish_active_session_to_bhiksha,
 )
 
@@ -40,7 +41,11 @@ DEFAULT_BHIKSHA_ROOT = settings.bhiksha_root.strip() or "../bhiksha"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--playbook-catalog", required=True, help="Path to playbook_catalog.json.")
+    parser.add_argument(
+        "--playbook-catalog",
+        default=str(default_master_playbook_catalog_path()),
+        help="Path to playbook_catalog.json. Defaults to the master playbook catalog.",
+    )
     parser.add_argument("--out-dir", required=True, help="Directory for active_session artifacts.")
     parser.add_argument("--bionic-google-sheet-id", default=DEFAULT_BIONIC_SHEET_ID)
     parser.add_argument("--bionic-google-sheet-name", default=DEFAULT_BIONIC_SHEET_NAME)

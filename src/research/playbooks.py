@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -13,7 +13,7 @@ from polars.exceptions import NoDataError
 from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
-from src.config import PROJECT_ROOT
+from src.config import PROJECT_ROOT, settings
 from src.research.exit_optimizer import load_exit_optimization_result
 from src.research.google_sheets import GoogleSheetTableClient, spreadsheet_id_from_url
 from src.research.loop_contracts import PLAYBOOK_CATALOG_CONTRACT_NAME, build_contract_metadata
@@ -39,6 +39,32 @@ _PLAYBOOK_STATUS_PRIORITY = {
     PLAYBOOK_STATUS_STALE: 1,
     PLAYBOOK_STATUS_RETIRED: 0,
 }
+MASTER_PLAYBOOK_STALE_DAYS = 60
+MASTER_PLAYBOOK_CATALOG_CONTRACT_NAME = "master_playbook_catalog"
+MASTER_PLAYBOOK_OVERRIDE_RETIRED = "retired"
+
+_MASTER_PLAYBOOK_SHEET_HEADERS = [
+    "catalog_key",
+    "playbook_id",
+    "symbol",
+    "bias_template",
+    "strategy_key",
+    "strategy_family",
+    "direction",
+    "lifecycle_status",
+    "operator_status_override",
+    "operator_notes",
+    "bionic_ready",
+    "first_validated_date",
+    "last_validated_date",
+    "validation_count",
+    "expectancy",
+    "confidence",
+    "signal_count",
+    "execution_robustness",
+    "thesis_exit_policy",
+    "playbook_summary_json",
+]
 
 _SUPPORTED_STRATEGY_KEYS = set(_SUPPORTED_EXECUTION_PRESETS)
 
@@ -72,6 +98,7 @@ _ALLOWED_INTRADAY_THESIS = {
 
 class PlaybookRecord(BaseModel):
     playbook_id: str
+    catalog_key: str | None = None
     strategy_key: str
     strategy_family: str
     strategy_display_name: str
@@ -82,6 +109,8 @@ class PlaybookRecord(BaseModel):
     horizon: str = "intraday"
     regime_tags: list[str] = Field(default_factory=list)
     lifecycle_status: Literal["active", "stale", "retired"] = PLAYBOOK_STATUS_ACTIVE
+    operator_status_override: str = ""
+    operator_notes: str = ""
     automation_status: str
     surface_class: str
     entry_params: dict[str, Any] = Field(default_factory=dict)
@@ -107,7 +136,9 @@ class PlaybookRecord(BaseModel):
     signal_count: int | None = None
     execution_robustness: float | None = None
     stress_metrics: dict[str, Any] = Field(default_factory=dict)
+    first_validated_date: str | None = None
     last_validated_date: str
+    validation_count: int = 1
     research_slice_id: str | None = None
     bionic_ready: bool = False
     source: dict[str, Any] = Field(default_factory=dict)
@@ -117,6 +148,25 @@ class PlaybookRecord(BaseModel):
     @classmethod
     def normalize_symbol(cls, value: Any) -> str:
         return str(value).upper()
+
+    @model_validator(mode="after")
+    def populate_catalog_defaults(self) -> "PlaybookRecord":
+        if not self.catalog_key:
+            self.catalog_key = _build_catalog_key(
+                strategy_key=self.strategy_key,
+                symbol=self.symbol,
+                direction=self.direction,
+                entry_params=self.entry_params,
+                thesis_exit_policy=self.thesis_exit_policy,
+                thesis_exit_params=self.thesis_exit_params,
+                catastrophe_exit_params=self.catastrophe_exit_params,
+                execution_mapping=self.execution_mapping,
+            )
+        if not self.first_validated_date:
+            self.first_validated_date = self.last_validated_date
+        self.operator_status_override = str(self.operator_status_override or "").strip().lower()
+        self.operator_notes = str(self.operator_notes or "").strip()
+        return self
 
 
 class BiasInputRow(BaseModel):
@@ -295,10 +345,179 @@ def build_playbook_records_from_queue(
     )
 
 
+def default_master_playbook_catalog_path() -> Path:
+    configured = Path(settings.master_playbook_catalog_path)
+    if configured.is_absolute():
+        return configured
+    return (PROJECT_ROOT / configured).resolve()
+
+
+def default_master_playbook_projection_path() -> Path:
+    configured = Path(settings.master_playbook_projection_path)
+    if configured.is_absolute():
+        return configured
+    return (PROJECT_ROOT / configured).resolve()
+
+
+def merge_master_playbook_catalog(
+    *,
+    new_playbooks: list[PlaybookRecord],
+    catalog_path: str | Path | None = None,
+    projection_path: str | Path | None = None,
+    sync_sheet: bool = True,
+) -> tuple[Path, Path | None, list[PlaybookRecord]]:
+    resolved_catalog = Path(catalog_path) if catalog_path is not None else default_master_playbook_catalog_path()
+    resolved_projection = (
+        Path(projection_path) if projection_path is not None else default_master_playbook_projection_path()
+    )
+    existing = load_master_playbook_records(resolved_catalog)
+    sheet_overrides = load_master_playbook_sheet_overrides()
+    merged = _merge_playbook_records(existing=existing, incoming=new_playbooks, sheet_overrides=sheet_overrides)
+    _write_master_playbook_catalog(
+        resolved_catalog,
+        merged,
+        projection_path=resolved_projection,
+    )
+    if sync_sheet:
+        sync_master_playbook_catalog_sheet(playbooks=merged)
+    return resolved_catalog, resolved_projection, merged
+
+
+def refresh_master_playbook_catalog_statuses(
+    *,
+    catalog_path: str | Path | None = None,
+    projection_path: str | Path | None = None,
+    sync_sheet: bool = True,
+) -> tuple[Path, Path | None, list[PlaybookRecord]]:
+    resolved_catalog = Path(catalog_path) if catalog_path is not None else default_master_playbook_catalog_path()
+    resolved_projection = (
+        Path(projection_path) if projection_path is not None else default_master_playbook_projection_path()
+    )
+    existing = load_master_playbook_records(resolved_catalog)
+    sheet_overrides = load_master_playbook_sheet_overrides()
+    refreshed = _merge_playbook_records(existing=existing, incoming=[], sheet_overrides=sheet_overrides)
+    _write_master_playbook_catalog(resolved_catalog, refreshed, projection_path=resolved_projection)
+    if sync_sheet:
+        sync_master_playbook_catalog_sheet(playbooks=refreshed)
+    return resolved_catalog, resolved_projection, refreshed
+
+
+def seed_master_playbook_catalog_from_queue(
+    *,
+    queue_path: str | Path,
+    catalog_path: str | Path | None = None,
+    projection_path: str | Path | None = None,
+    sync_sheet: bool = True,
+    project_root: Path | None = None,
+) -> tuple[Path, Path | None, list[PlaybookRecord]]:
+    rows = _load_csv_rows(Path(queue_path))
+    playbooks = build_playbook_records_from_queue(rows, project_root=project_root)
+    return merge_master_playbook_catalog(
+        new_playbooks=playbooks,
+        catalog_path=catalog_path,
+        projection_path=projection_path,
+        sync_sheet=sync_sheet,
+    )
+
+
+def seed_master_playbook_catalog_from_catalog(
+    *,
+    source_catalog_path: str | Path,
+    catalog_path: str | Path | None = None,
+    projection_path: str | Path | None = None,
+    sync_sheet: bool = True,
+) -> tuple[Path, Path | None, list[PlaybookRecord]]:
+    playbooks = load_playbook_records(source_catalog_path)
+    return merge_master_playbook_catalog(
+        new_playbooks=playbooks,
+        catalog_path=catalog_path,
+        projection_path=projection_path,
+        sync_sheet=sync_sheet,
+    )
+
+
+def load_master_playbook_records(path: str | Path | None = None) -> list[PlaybookRecord]:
+    resolved = Path(path) if path is not None else default_master_playbook_catalog_path()
+    if not resolved.exists():
+        return []
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    return [PlaybookRecord.model_validate(item) for item in payload.get("playbooks", [])]
+
+
+def load_master_playbook_sheet_overrides(
+    *,
+    spreadsheet_id: str | None = None,
+    sheet_name: str | None = None,
+    credentials_path: str | Path | None = None,
+) -> dict[str, dict[str, str]]:
+    resolved_sheet_id = (spreadsheet_id or settings.master_playbook_sheet_id or settings.bionic_sheet_id).strip()
+    if not resolved_sheet_id:
+        return {}
+    resolved_sheet_name = (sheet_name or settings.master_playbook_sheet_name).strip()
+    resolved_credentials = str(credentials_path or settings.google_api_credentials_path).strip()
+    if not resolved_credentials:
+        return {}
+    try:
+        client = GoogleSheetTableClient(
+            spreadsheet_id=resolved_sheet_id,
+            sheet_name=resolved_sheet_name,
+            credentials_path=Path(resolved_credentials),
+        )
+        rows = client.read_rows()
+    except Exception:
+        return {}
+    overrides: dict[str, dict[str, str]] = {}
+    for row in rows:
+        catalog_key = str(row.get("catalog_key", "")).strip()
+        playbook_id = str(row.get("playbook_id", "")).strip()
+        key = catalog_key or playbook_id
+        if not key:
+            continue
+        overrides[key] = {
+            "operator_status_override": str(row.get("operator_status_override", "")).strip().lower(),
+            "operator_notes": str(row.get("operator_notes", "")).strip(),
+        }
+    return overrides
+
+
+def sync_master_playbook_catalog_sheet(
+    *,
+    playbooks: list[PlaybookRecord],
+    spreadsheet_id: str | None = None,
+    sheet_name: str | None = None,
+    credentials_path: str | Path | None = None,
+) -> None:
+    resolved_sheet_id = (spreadsheet_id or settings.master_playbook_sheet_id or settings.bionic_sheet_id).strip()
+    if not resolved_sheet_id:
+        return
+    resolved_sheet_name = (sheet_name or settings.master_playbook_sheet_name).strip()
+    resolved_credentials = str(credentials_path or settings.google_api_credentials_path).strip()
+    if not resolved_credentials:
+        return
+    client = GoogleSheetTableClient(
+        spreadsheet_id=resolved_sheet_id,
+        sheet_name=resolved_sheet_name,
+        credentials_path=Path(resolved_credentials),
+    )
+    rows = [_master_playbook_sheet_row(playbook) for playbook in playbooks]
+    client.overwrite_table(headers=_MASTER_PLAYBOOK_SHEET_HEADERS, rows=rows)
+
+
+def resolve_playbook_catalog_path(playbook_catalog_path: str | Path | None = None) -> Path:
+    if playbook_catalog_path is not None:
+        return Path(playbook_catalog_path)
+    master = default_master_playbook_catalog_path()
+    if master.exists():
+        return master
+    raise FileNotFoundError(
+        "No playbook catalog path provided and master_playbook_catalog.json does not exist yet."
+    )
+
+
 def route_bias_inputs(
     *,
     bias_inputs_path: str | Path,
-    playbook_catalog_path: str | Path,
+    playbook_catalog_path: str | Path | None = None,
     out_dir: str | Path,
 ) -> tuple[Path, Path, list[TranslatorSelection]]:
     biases = load_bias_inputs_sheet(bias_inputs_path)
@@ -314,11 +533,12 @@ def route_bias_inputs(
 def route_bias_rows(
     *,
     biases: list[BiasInputRow],
-    playbook_catalog_path: str | Path,
+    playbook_catalog_path: str | Path | None = None,
     out_dir: str | Path,
     bias_source: str = "in_memory",
 ) -> tuple[Path, Path, list[TranslatorSelection], list[dict[str, Any]]]:
-    playbooks = load_playbook_records(playbook_catalog_path)
+    resolved_catalog = resolve_playbook_catalog_path(playbook_catalog_path)
+    playbooks = load_playbook_records(resolved_catalog)
     grouped_playbooks = _group_playbooks(playbooks)
 
     target_dir = Path(out_dir)
@@ -362,7 +582,7 @@ def route_bias_rows(
             {
                 "generated_at": datetime.now(UTC).isoformat(),
                 "bias_inputs_path": bias_source,
-                "playbook_catalog_path": str(Path(playbook_catalog_path).resolve()),
+                "playbook_catalog_path": str(resolved_catalog.resolve()),
                 "armed_playbooks": armed_payloads,
                 "selections": [selection.model_dump(mode="json") for selection in selections],
             },
@@ -380,7 +600,7 @@ def route_google_sheet_bias_inputs(
     spreadsheet_id: str,
     sheet_name: str,
     credentials_path: str | Path,
-    playbook_catalog_path: str | Path,
+    playbook_catalog_path: str | Path | None = None,
     out_dir: str | Path,
     update_sheet: bool = True,
 ) -> tuple[Path, Path, list[TranslatorSelection]]:
@@ -463,8 +683,9 @@ def load_live_observation_records(path: str | Path) -> list[LiveObservationRecor
     return [LiveObservationRecord.model_validate(item) for item in payload.get("records", [])]
 
 
-def load_playbook_records(path: str | Path) -> list[PlaybookRecord]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+def load_playbook_records(path: str | Path | None = None) -> list[PlaybookRecord]:
+    resolved = resolve_playbook_catalog_path(path)
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
     return [PlaybookRecord.model_validate(item) for item in payload.get("playbooks", [])]
 
 
@@ -566,8 +787,29 @@ def _playbook_from_queue_row(
     bhiksha_supported = surface_class == "supported"
     has_optimized_exit = exit_optimization is not None
     bionic_ready = bhiksha_supported and has_optimized_exit
+    validated_date = str(row.get("last_action_run_date") or row.get("last_seen_run_date") or "")
+    catalog_key = _build_catalog_key(
+        strategy_key=strategy_key,
+        symbol=str(row["ticker"]),
+        direction=str(row["direction"]),
+        entry_params={**strategy_params, "direction": str(row["direction"])},
+        thesis_exit_policy=exit_optimization.thesis_exit_policy if exit_optimization is not None else None,
+        thesis_exit_params=(
+            json_ready(exit_optimization.thesis_exit_params) if exit_optimization is not None else {}
+        ),
+        catastrophe_exit_params=(
+            json_ready(exit_optimization.catastrophe_exit_params)
+            if exit_optimization is not None
+            else {
+                "stop_loss_pct": manifest["exit"].get("stop_loss_pct"),
+                "hard_flat_time_et": manifest["exit"].get("hard_flat_time_et"),
+            }
+        ),
+        execution_mapping=json_ready(manifest["execution"]),
+    )
     record = PlaybookRecord(
         playbook_id=playbook_id,
+        catalog_key=catalog_key,
         strategy_key=strategy_key,
         strategy_family=str(row.get("strategy_family", strategy_key)),
         strategy_display_name=str(row["strategy"]),
@@ -631,7 +873,9 @@ def _playbook_from_queue_row(
             "mc_total_r_p95": _maybe_float(m5_row.get("mc_total_r_p95")),
             "mc_max_dd_p50": _maybe_float(m5_row.get("mc_max_dd_p50")),
         },
-        last_validated_date=str(row.get("last_action_run_date") or row.get("last_seen_run_date") or ""),
+        first_validated_date=validated_date,
+        last_validated_date=validated_date,
+        validation_count=1,
         research_slice_id=_optional_text(row.get("research_slice_id")),
         bionic_ready=bionic_ready,
         source={
@@ -709,24 +953,148 @@ def _write_csv_rows(path: Path, rows: list[dict[str, Any]]) -> None:
 def _write_playbook_projection_csv(path: Path, playbooks: list[PlaybookRecord]) -> None:
     rows = [
         {
+            "catalog_key": playbook.catalog_key,
             "playbook_id": playbook.playbook_id,
             "symbol": playbook.symbol,
             "bias_template": playbook.bias_template,
             "strategy_key": playbook.strategy_key,
             "direction": playbook.direction,
             "lifecycle_status": playbook.lifecycle_status,
+            "operator_status_override": playbook.operator_status_override,
+            "operator_notes": playbook.operator_notes,
             "automation_status": playbook.automation_status,
             "bionic_ready": playbook.bionic_ready,
             "expectancy": playbook.expectancy,
             "confidence": playbook.confidence,
             "signal_count": playbook.signal_count,
             "execution_robustness": playbook.execution_robustness,
+            "first_validated_date": playbook.first_validated_date,
             "last_validated_date": playbook.last_validated_date,
+            "validation_count": playbook.validation_count,
             "is_full_m1_m5_survivor": playbook.is_full_m1_m5_survivor,
         }
         for playbook in playbooks
     ]
     _write_csv_rows(path, rows)
+
+
+def _write_master_playbook_catalog(
+    path: Path,
+    playbooks: list[PlaybookRecord],
+    *,
+    projection_path: Path | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        **build_contract_metadata(MASTER_PLAYBOOK_CATALOG_CONTRACT_NAME),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "playbook_count": len(playbooks),
+        "playbook_status_counts": {
+            status: sum(1 for playbook in playbooks if playbook.lifecycle_status == status)
+            for status in (PLAYBOOK_STATUS_ACTIVE, PLAYBOOK_STATUS_STALE, PLAYBOOK_STATUS_RETIRED)
+        },
+        "playbooks": [playbook.model_dump(mode="json") for playbook in playbooks],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if projection_path is not None:
+        _write_playbook_projection_csv(projection_path, playbooks)
+
+
+def _merge_playbook_records(
+    *,
+    existing: list[PlaybookRecord],
+    incoming: list[PlaybookRecord],
+    sheet_overrides: dict[str, dict[str, str]],
+) -> list[PlaybookRecord]:
+    by_key: dict[str, PlaybookRecord] = {}
+    for playbook in existing:
+        by_key[playbook.catalog_key or playbook.playbook_id] = playbook
+    for playbook in incoming:
+        key = playbook.catalog_key or playbook.playbook_id
+        current = by_key.get(key)
+        if current is None:
+            updated = playbook.model_copy(
+                update={
+                    "first_validated_date": playbook.first_validated_date or playbook.last_validated_date,
+                    "validation_count": max(playbook.validation_count, 1),
+                }
+            )
+        else:
+            updated = playbook.model_copy(
+                update={
+                    "first_validated_date": current.first_validated_date or playbook.first_validated_date or playbook.last_validated_date,
+                    "validation_count": max(current.validation_count, 1) + 1,
+                    "operator_status_override": current.operator_status_override,
+                    "operator_notes": current.operator_notes,
+                }
+            )
+        by_key[key] = updated
+
+    merged: list[PlaybookRecord] = []
+    for key, playbook in by_key.items():
+        override = sheet_overrides.get(key) or sheet_overrides.get(playbook.playbook_id) or {}
+        effective = playbook.model_copy(
+            update={
+                "operator_status_override": override.get("operator_status_override", playbook.operator_status_override),
+                "operator_notes": override.get("operator_notes", playbook.operator_notes),
+            }
+        )
+        effective = effective.model_copy(update={"lifecycle_status": _effective_lifecycle_status(effective)})
+        merged.append(effective)
+    return sorted(
+        merged,
+        key=lambda record: (
+            record.symbol,
+            record.bias_template,
+            -_PLAYBOOK_STATUS_PRIORITY[record.lifecycle_status],
+            -(record.expectancy or float("-inf")),
+            record.playbook_id,
+        ),
+    )
+
+
+def _effective_lifecycle_status(playbook: PlaybookRecord) -> Literal["active", "stale", "retired"]:
+    override = (playbook.operator_status_override or "").strip().lower()
+    if override == MASTER_PLAYBOOK_OVERRIDE_RETIRED:
+        return PLAYBOOK_STATUS_RETIRED
+    last_validated = _parse_iso_date(playbook.last_validated_date)
+    if last_validated is not None and (datetime.now(UTC).date() - last_validated) > timedelta(days=MASTER_PLAYBOOK_STALE_DAYS):
+        return PLAYBOOK_STATUS_STALE
+    return PLAYBOOK_STATUS_ACTIVE
+
+
+def _master_playbook_sheet_row(playbook: PlaybookRecord) -> dict[str, Any]:
+    return {
+        "catalog_key": playbook.catalog_key or "",
+        "playbook_id": playbook.playbook_id,
+        "symbol": playbook.symbol,
+        "bias_template": playbook.bias_template,
+        "strategy_key": playbook.strategy_key,
+        "strategy_family": playbook.strategy_family,
+        "direction": playbook.direction,
+        "lifecycle_status": playbook.lifecycle_status,
+        "operator_status_override": playbook.operator_status_override,
+        "operator_notes": playbook.operator_notes,
+        "bionic_ready": playbook.bionic_ready,
+        "first_validated_date": playbook.first_validated_date or "",
+        "last_validated_date": playbook.last_validated_date,
+        "validation_count": playbook.validation_count,
+        "expectancy": playbook.expectancy,
+        "confidence": playbook.confidence,
+        "signal_count": playbook.signal_count,
+        "execution_robustness": playbook.execution_robustness,
+        "thesis_exit_policy": playbook.thesis_exit_policy or "",
+        "playbook_summary_json": json.dumps(
+            {
+                "entry_params": playbook.entry_params,
+                "thesis_exit_params": playbook.thesis_exit_params,
+                "catastrophe_exit_params": playbook.catastrophe_exit_params,
+                "vehicle_mapping": playbook.vehicle_mapping,
+                "bhiksha_compatibility": playbook.bhiksha_compatibility,
+            },
+            sort_keys=True,
+        ),
+    }
 
 
 def _group_playbooks(playbooks: list[PlaybookRecord]) -> dict[str, list[PlaybookRecord]]:
@@ -870,6 +1238,38 @@ def _build_playbook_id(
             "entry": entry_params,
             "execution": execution_mapping,
             "exit": exit_mapping,
+        },
+        length=12,
+    )
+    return f"{strategy_key}_{symbol.lower()}_{direction}_{digest}"
+
+
+def _build_catalog_key(
+    *,
+    strategy_key: str,
+    symbol: str,
+    direction: str,
+    entry_params: dict[str, Any],
+    thesis_exit_policy: str | None,
+    thesis_exit_params: dict[str, Any],
+    catastrophe_exit_params: dict[str, Any],
+    execution_mapping: dict[str, Any],
+) -> str:
+    digest = stable_signature(
+        {
+            "strategy_key": strategy_key,
+            "symbol": symbol.upper(),
+            "direction": direction,
+            "entry": entry_params,
+            "thesis_exit_policy": thesis_exit_policy,
+            "thesis_exit_params": thesis_exit_params,
+            "catastrophe_exit_params": catastrophe_exit_params,
+            "execution_profile": {
+                "profile": execution_mapping.get("profile"),
+                "option_mapping": execution_mapping.get("option_mapping"),
+                "dte_min": execution_mapping.get("dte_min"),
+                "dte_max": execution_mapping.get("dte_max"),
+            },
         },
         length=12,
     )
@@ -1027,6 +1427,8 @@ def _csv_value(value: Any) -> Any:
 __all__ = [
     "BiasInputRow",
     "LiveObservationRecord",
+    "MASTER_PLAYBOOK_CATALOG_CONTRACT_NAME",
+    "MASTER_PLAYBOOK_STALE_DAYS",
     "PLAYBOOK_STATUS_ACTIVE",
     "PLAYBOOK_STATUS_RETIRED",
     "PLAYBOOK_STATUS_STALE",
@@ -1035,11 +1437,20 @@ __all__ = [
     "augment_playbook_catalog_from_queue",
     "build_armed_deployment_manifest",
     "build_playbook_records_from_queue",
+    "default_master_playbook_catalog_path",
+    "default_master_playbook_projection_path",
     "load_bias_inputs_sheet",
     "load_live_observation_records",
+    "load_master_playbook_records",
     "load_playbook_records",
+    "merge_master_playbook_catalog",
+    "refresh_master_playbook_catalog_statuses",
+    "resolve_playbook_catalog_path",
     "route_bias_rows",
     "route_google_sheet_bias_inputs",
     "route_bias_inputs",
+    "seed_master_playbook_catalog_from_queue",
+    "seed_master_playbook_catalog_from_catalog",
+    "sync_master_playbook_catalog_sheet",
     "write_live_observation_records",
 ]

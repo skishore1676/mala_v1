@@ -90,6 +90,64 @@ class GoogleSheetTableClient:
             .execute()
         )
 
+    def overwrite_table(
+        self,
+        *,
+        headers: list[str],
+        rows: list[dict[str, Any]],
+        clear_range_suffix: str = "A1:ZZ5000",
+    ) -> dict[str, Any]:
+        self.ensure_sheet_exists()
+        self.service.spreadsheets().values().clear(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{self.sheet_name}!{clear_range_suffix}",
+            body={},
+        ).execute()
+        values = [headers]
+        for row in rows:
+            values.append([row.get(header, "") for header in headers])
+        return (
+            self.service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{self.sheet_name}!A1",
+                valueInputOption="USER_ENTERED",
+                body={"values": values},
+            )
+            .execute()
+        )
+
+    def ensure_sheet_exists(self) -> None:
+        metadata = (
+            self.service.spreadsheets()
+            .get(spreadsheetId=self.spreadsheet_id)
+            .execute()
+        )
+        sheets = metadata.get("sheets", [])
+        for sheet in sheets:
+            props = sheet.get("properties", {})
+            if str(props.get("title", "")).strip() == self.sheet_name:
+                return
+        (
+            self.service.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": self.sheet_name,
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+
     def _header_column_map(self) -> dict[str, str]:
         result = (
             self.service.spreadsheets()

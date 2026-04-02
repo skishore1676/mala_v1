@@ -201,6 +201,45 @@ An older M5 survivor that only has the family preset exit but no `m5_exit_optimi
 
 `playbook_catalog.csv` is the flat operator projection.
 
+### 6.5 Master Catalog
+
+Mala now keeps one durable master catalog separate from individual nightly
+bundles.
+
+Canonical local files:
+
+- `data/playbooks/master_playbook_catalog.json`
+- `data/playbooks/master_playbook_catalog.csv`
+
+Operator mirror tab in the existing Google Sheet:
+
+- `Master_Playbook_Catalog`
+
+Important behavior:
+
+- nightly or manual backfills should merge new validated playbooks into the
+  master catalog rather than replacing prior weapons
+- playbooks older than 60 days are marked `stale` automatically
+- `operator_status_override = retired` in the sheet forces a playbook to stay
+  retired until research explicitly supersedes it
+- the translator/session compiler now defaults to this master catalog when no
+  explicit `--playbook-catalog` path is provided
+
+One-time seed from a known-good playbook export:
+
+```bash
+./.venv/bin/python scripts/backfill_master_playbook_catalog.py \
+  --source-playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json
+```
+
+Seed or refresh from the review queue when queue rows are correctly marked as
+full M5 survivors:
+
+```bash
+./.venv/bin/python scripts/backfill_master_playbook_catalog.py \
+  --queue-path data/results/nightly_regime_matrix/research_control/m2_human_review_queue.csv
+```
+
 ### 7. Export your bias sheet and run the deterministic router
 
 Export your Google Sheet to CSV with at least these columns:
@@ -241,7 +280,6 @@ Legacy playbook-only routing remains available:
 ```bash
 ./.venv/bin/python scripts/run_bias_playbook_router.py \
   --bias-inputs /path/to/bias_sheet.csv \
-  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/bionic_router/<YYYY-MM-DD>
 ```
 
@@ -258,7 +296,6 @@ Default direct-sheet command:
 
 ```bash
 ./.venv/bin/python scripts/compile_active_session.py \
-  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/active_session/<YYYY-MM-DD> \
   --manual-google-sheet-id <entry_v1_sheet_id>
 ```
@@ -312,7 +349,6 @@ If you want a dry run against the live sheet without writing those columns back:
 
 ```bash
 ./.venv/bin/python scripts/compile_active_session.py \
-  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/active_session/<YYYY-MM-DD> \
   --manual-google-sheet-id <entry_v1_sheet_id> \
   --no-bionic-sheet-update
@@ -322,7 +358,6 @@ If you want a one-command handoff into Bhiksha's session-payload lane:
 
 ```bash
 ./.venv/bin/python scripts/compile_active_session.py \
-  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/active_session/<YYYY-MM-DD> \
   --manual-google-sheet-id <entry_v1_sheet_id> \
   --live-authorized \
