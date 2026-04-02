@@ -304,21 +304,16 @@ For live-authorized session payloads, add `--live-authorized`. That flips
 `execution.shadow_only` to `false` in the compiled session file without
 changing the underlying playbook catalog.
 
-Defaults built into the script:
-
-- spreadsheet id: `1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc`
-- sheet name: `Bionic_Loop`
-- manual sheet name: `entry_v1`
-- credentials path: `../public_api_trading_v3/config/google-credentials.json`
-
 Recommended `.env` entries:
 
 ```dotenv
-BIONIC_SHEET_ID=1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc
+BIONIC_SHEET_ID=<spreadsheet_id>
 BIONIC_SHEET_NAME=Bionic_Loop
 MANUAL_ENTRY_SHEET_ID=<entry_v1_sheet_id>
 MANUAL_ENTRY_SHEET_NAME=entry_v1
-GOOGLE_API_CREDENTIALS_PATH=../public_api_trading_v3/config/google-credentials.json
+MASTER_PLAYBOOK_SHEET_ID=<spreadsheet_id>
+MASTER_PLAYBOOK_SHEET_NAME=Master_Playbook_Catalog
+GOOGLE_API_CREDENTIALS_PATH=/absolute/path/to/google-credentials.json
 BHIKSHA_ROOT=../bhiksha
 ```
 

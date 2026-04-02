@@ -17,11 +17,6 @@ from src.research import (
 )
 
 
-_FALLBACK_PUBLIC_API_TRADING_V3_CREDENTIALS = (
-    PROJECT_ROOT.parent / "public_api_trading_v3" / "config" / "google-credentials.json"
-)
-
-
 def _default_credentials_path() -> str:
     configured = settings.google_api_credentials_path.strip()
     if configured:
@@ -29,10 +24,10 @@ def _default_credentials_path() -> str:
         if not path.is_absolute():
             path = (PROJECT_ROOT / path).resolve()
         return str(path)
-    return str(_FALLBACK_PUBLIC_API_TRADING_V3_CREDENTIALS)
+    return ""
 
 
-DEFAULT_BIONIC_SHEET_ID = settings.bionic_sheet_id.strip() or "1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc"
+DEFAULT_BIONIC_SHEET_ID = settings.bionic_sheet_id.strip()
 DEFAULT_BIONIC_SHEET_NAME = settings.bionic_sheet_name.strip() or "Bionic_Loop"
 DEFAULT_MANUAL_SHEET_ID = settings.manual_entry_sheet_id.strip()
 DEFAULT_MANUAL_SHEET_NAME = settings.manual_entry_sheet_name.strip() or "entry_v1"
@@ -61,8 +56,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if not args.bionic_google_sheet_id:
+        raise SystemExit("Bionic Google Sheet id is required; set --bionic-google-sheet-id or BIONIC_SHEET_ID in .env")
     if not args.manual_google_sheet_id:
         raise SystemExit("manual Google Sheet id is required; set --manual-google-sheet-id or MANUAL_ENTRY_SHEET_ID in .env")
+    if not args.google_credentials:
+        raise SystemExit("Google credentials path is required; set --google-credentials or GOOGLE_API_CREDENTIALS_PATH in .env")
 
     session_path, report_path, payload = compile_active_session_from_google_sheets(
         bionic_spreadsheet_id=args.bionic_google_sheet_id,

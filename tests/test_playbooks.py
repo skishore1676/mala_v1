@@ -328,8 +328,8 @@ def test_live_observation_contract_round_trip(tmp_path: Path) -> None:
 
 
 def test_spreadsheet_id_from_url_extracts_id() -> None:
-    url = "https://docs.google.com/spreadsheets/d/1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc/edit?gid=1907235657#gid=1907235657"
-    assert spreadsheet_id_from_url(url) == "1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc"
+    url = "https://docs.google.com/spreadsheets/d/testSpreadsheet123/edit?gid=1907235657#gid=1907235657"
+    assert spreadsheet_id_from_url(url) == "testSpreadsheet123"
     assert spreadsheet_id_from_url("abc123") == "abc123"
 
 
@@ -407,7 +407,7 @@ def test_route_google_sheet_bias_inputs_updates_machine_columns(tmp_path: Path, 
     monkeypatch.setattr("src.research.playbooks.GoogleSheetTableClient", FakeSheetClient)
 
     _, _, selections = route_google_sheet_bias_inputs(
-        spreadsheet_id="1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc",
+        spreadsheet_id="testSpreadsheet123",
         sheet_name="Bionic_Loop",
         credentials_path=tmp_path / "creds.json",
         playbook_catalog_path=catalog_path,
