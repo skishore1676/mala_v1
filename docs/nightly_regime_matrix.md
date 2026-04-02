@@ -92,114 +92,23 @@ reason = no M3-M5 follow-up executed
 
 That means the pipeline is healthy, the scout stopped where it was supposed to stop, and deployable playbooks were not expected from that pass.
 
-## Operator Checklist
+## Canonical Operator Checklist
 
-This is the practical end-to-end loop.
+The canonical end-to-end checklist now lives in:
 
-### 1. Run the nightly Mala loop
+- [bionic_loop_checklist.md](/Users/suman/kg_env/projects/mala_v1/docs/bionic_loop_checklist.md)
 
-```bash
-./.venv/bin/python scripts/run_nightly_regime_matrix.py
-```
+Use that document for the full daily loop across:
 
-Read the summary literally:
+- nightly research
+- master catalog maintenance
+- bias authorization
+- session compilation
+- Bhiksha launch
+- post-close review
 
-- if `deployment_candidates_generated = 0` and `reason = no M3-M5 follow-up executed`, that is a healthy scout-only night
-- the main outputs are still the queue, workbook, and charts
-
-### 2. Review only the M2 queue surface
-
-Open:
-
-- [data/results/nightly_regime_matrix/research_control/m2_human_review_queue.csv](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/m2_human_review_queue.csv)
-- [data/results/nightly_regime_matrix/research_control/review_bundle/human_review_workbook.xlsx](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/review_bundle/human_review_workbook.xlsx)
-- charts under [data/results/nightly_regime_matrix/research_control/charts](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/charts)
-
-Focus only on rows with:
-
-- `latest_stage_reached = M2`
-- `queue_status in {NEW, PENDING}`
-
-Your editable columns are:
-
-- `human_decision`
-- `human_notes`
-- `priority`
-
-Normal decisions:
-
-- `promote_to_m3`
-- `retune`
-- `expand_symbols`
-- `kill`
-
-### 3. Let the next nightly run execute approved follow-ups
-
-On the next nightly run, the agent will:
-
-- keep doing the broad M1/M2 scout
-- also consume approved queue actions under nightly caps
-
-Results by decision:
-
-- `promote_to_m3`: candidate runs through `M3 -> M4 -> M5`
-- `retune`: focused local M1/M2 search around the current config
-- `expand_symbols`: the same family/config neighborhood on Tier 2 names
-- `kill`: row becomes terminal and stops participating automatically
-
-### 4. Interpret queue state correctly
-
-There are two different ideas in one row:
-
-- `queue_status` answers whether the requested task finished
-- `latest_stage_reached` answers how far the candidate got scientifically
-
-Examples:
-
-- `queue_status = EXECUTED`, `latest_stage_reached = M2`, `latest_stage_decision = retune_completed`
-  - the retune task completed, but this is not a deployable playbook
-- `queue_status = EXECUTED`, `latest_stage_reached = M5`, `latest_stage_decision = promote`, `is_full_m1_m5_survivor = True`
-  - this is a validated survivor and is eligible to become a playbook
-
-### 5. After a candidate reaches M5 and survives, treat it as a playbook
-
-Once a row has:
-
-- `queue_status = EXECUTED`
-- `latest_stage_reached = M5`
-- `latest_stage_decision = promote`
-- `is_full_m1_m5_survivor = True`
-
-it has finished the research gauntlet for that reviewed config.
-
-What happens next:
-
-- the row stays terminal in the queue
-- its follow-up artifact directory contains the final `M3`, `M4`, and `M5` evidence
-- the latest nightly bundle playbook catalog can compile it into a first-class playbook record
-
-The queue row is done as a research task. The resulting playbook starts a different lifecycle: `active`, later maybe `stale`, later maybe `retired`.
-
-### 6. Confirm the playbook in the latest bundle
-
-Inspect the newest nightly bundle:
-
-- `playbook_catalog.json`
-- `playbook_catalog.csv`
-
-`playbook_catalog.json` now contains both:
-
-- `contexts`: the broad coverage matrix for Bhiksha/import compatibility
-- `playbooks`: first-class validated playbook records compiled from full survivors
-
-For the Bionic loop, a playbook is only `bionic_ready` when it includes:
-
-- an optimized `thesis_exit_*` block anchored to the underlying
-- a `catastrophe_exit_*` block that Bhiksha can enforce on the option position
-
-An older M5 survivor that only has the family preset exit but no `m5_exit_optimization.json` remains research-valid, but the translator will not arm it for Bhiksha.
-
-`playbook_catalog.csv` is the flat operator projection.
+This document should now be read as the research reference for the nightly
+forge rather than the primary operator checklist.
 
 ### 6.5 Master Catalog
 

@@ -1,6 +1,6 @@
 # First Agentic Run
 
-Current operator-facing loop documentation now lives in `docs/nightly_regime_matrix.md`.
+Current operator-facing loop documentation now lives in `docs/bionic_loop_checklist.md`.
 
 Date: 2026-03-23
 
