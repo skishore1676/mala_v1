@@ -53,13 +53,14 @@ Every cycle should end with one of four outcomes:
 - Do not change stage gates, promotion criteria, or holdout boundaries.
 - Do not silently promote a strategy because the story sounds good.
 - Do not cherry-pick only favorable tickers, windows, or ratios while presenting the result as general.
-- Do not modify strategy code unless the user explicitly asks for implementation work.
+- Do not modify repo code when `repo_change_policy` is `propose`.
 - Do not spend unlimited experiment budget; stay inside declared search spaces and bounded retries.
 - Do not overwrite prior research conclusions without recording what changed and why.
 
 ## Inputs The Agent Should Expect
 
 - A strategy idea, hypothesis, or existing strategy name.
+- A hypothesis markdown file path when the workflow is file-driven.
 - Current stage or the best known stage for that strategy.
 - Allowed parameter space and evaluation budget.
 - Existing evidence from `research_state.yaml`, `results.db`, and prior artifacts.
@@ -77,6 +78,30 @@ Quick examples:
 - `PhysicsEngine().enrich_for_features(df, {"market_impulse"})` if you need to request the Market Impulse transform explicitly by name.
 - `PhysicsEngine().enrich_for_features(df, {"market_impulse:15m"})` if you want a parameterized Market Impulse transform for timeframe sweeps.
 
+Hypothesis-file contract:
+
+- If the user points you at a hypothesis markdown file, treat that file as the source of truth.
+- Read the hypothesis, constraints, and output requirements from the file before choosing experiments.
+- Write the run results back into the same file unless the user asks for a separate report.
+- Preserve the user's hypothesis text; update only the report/status sections unless asked to revise the idea itself.
+- If the file contains an `Agent Report` section, replace that section in place with the latest run summary.
+- Respect `repo_change_policy` in the hypothesis file:
+  - `propose`: do not edit repo code; explain blockers and list the minimal code/surface changes required.
+  - `implement_research_surface`: you may implement missing Mala research-surface changes needed to test the hypothesis honestly.
+- If `repo_change_policy` is `implement_research_surface`, create a fresh `codex/` branch before editing repo code.
+- When implementing research-surface changes, stop after:
+  - making the minimal bounded code change,
+  - running relevant validation,
+  - updating the hypothesis file with what changed,
+  - and reporting the branch name and changed files.
+- Do not merge automatically.
+- Respect file status fields:
+  - `pending`: eligible to run
+  - `retune`: eligible to run again with a bounded follow-up
+  - `running`: treat as in progress and skip unless the user explicitly asks to resume or replace it
+  - `blocked`: do not rerun automatically; explain blockers and wait for a human to revise the hypothesis or repo
+  - `completed`: terminal; do not rerun unless the user explicitly reopens it
+
 ## Outputs The Agent Must Produce
 
 - A short hypothesis card:
@@ -93,11 +118,20 @@ Quick examples:
   - `supported`,
   - `proposed`,
   - or `derived/internal`.
-- An execution readiness label:
-  - `fully_executable`,
-  - `research_valid_partially_executable`,
-  - or `research_valid_not_executable`.
-- When the strategy uses a proposed surface, a short Bhiksha capability-gap note.
+
+Execution/readiness reporting:
+
+- Do not introduce Bhiksha or execution-surface concerns during hypothesis mapping, M1, or M2 unless the user explicitly asked for execution viability.
+- Treat the first blocker as a Mala research-surface question:
+  - can the hypothesis be expressed honestly with the current repo strategy/feature surface?
+- Only discuss execution readiness when:
+  - the user explicitly asks for it, or
+  - the run legitimately reaches `M5`.
+- If a run is blocked before `M5`, prefer labels like:
+  - `blocked by current Mala strategy surface`,
+  - `blocked by missing research feature`,
+  - `blocked by missing bounded parameter surface`.
+- Mention Bhiksha capability gaps only as a secondary note when they are directly relevant to a run that has already demonstrated research validity.
 
 Gate logging contract:
 
@@ -126,6 +160,17 @@ Execution preference:
 - Only create a temporary or durable scratch script when the workflow is too large for an inline command or the user explicitly wants a reusable file.
 - Do not treat scratch scripts as the default research interface.
 
+File-driven output preference:
+
+- Prefer one self-contained markdown artifact that contains:
+  - the hypothesis,
+  - bounded experiment assumptions,
+  - stage outcomes,
+  - disposition,
+  - and next step.
+- If the run updates an existing hypothesis file, include a timestamped run summary in the `Agent Report` section.
+- Keep prior report text only if the file explicitly asks for run history; otherwise replace stale report text with the latest view.
+
 ## Workflow
 
 1. Normalize the idea.
@@ -141,6 +186,7 @@ Execution preference:
    - If the explored knobs fit `docs/strategy_surface.yaml`, treat the run as `supported`.
    - If the explored knobs materially affect Mala research but Bhiksha cannot execute them yet, treat the run as `proposed` and compare against `docs/strategy_surface_proposed.yaml`.
    - If a field is merely a derived helper such as a computed column name, do not elevate it into either contract unless Bhiksha consumes it directly.
+   - For hypothesis-driven runs before `M5`, keep the primary framing on Mala research fidelity rather than Bhiksha execution support.
 
    Default research scope:
    - Start with the tracked tickers for the strategy.
@@ -152,6 +198,10 @@ Execution preference:
 
 5. Run only stage-appropriate work.
    Use the orchestrator, callable research tools, and bounded parameter space. Do not skip ahead.
+   Repo-change handling:
+   - If the current surface cannot test the hypothesis honestly and `repo_change_policy` is `propose`, stop and report the minimal required change.
+   - If the current surface cannot test the hypothesis honestly and `repo_change_policy` is `implement_research_surface`, first create a fresh `codex/` branch, then implement only the smallest Mala research-surface change needed to resume honest testing.
+   - Keep execution/live/deployment changes out of scope unless the user explicitly expands the request.
 
 6. Ask Newton only for what the strategy needs.
    Prefer feature-targeted enrichment through `PhysicsEngine.enrich_for_features(...)` or equivalent runner paths instead of computing every transform by default.
@@ -168,9 +218,42 @@ Execution preference:
 10. Write the surface outcome.
    Every strategy run must end with one of:
    - `uses supported surface only`,
-   - `introduces proposed surface`,
-   - `requires Bhiksha capability expansion`.
-   If the run introduces a proposed surface, name the missing Bhiksha capabilities explicitly and reference `docs/strategy_surface_proposed.yaml`.
+   - `introduces proposed Mala research surface`,
+   - `blocked by current Mala research surface`.
+   If the run is pre-`M5`, keep the framing entirely on Mala research fidelity unless the user explicitly asked for execution readiness.
+   Only name missing Bhiksha capabilities explicitly when the user asked for execution readiness or the run reached `M5`.
+
+11. If operating from a hypothesis file, write back into the file.
+    Keep the file ready for automation reruns:
+    - update the status,
+    - refresh the `Agent Report`,
+    - keep artifact paths explicit,
+    - and leave a clear next action for the next run.
+    - set status based on outcome:
+      - `completed` for a finished cycle with a stable disposition
+      - `retune` when another bounded pass is the right next action
+      - `blocked` when the hypothesis cannot be tested honestly within the current repo surface
+
+## Hypothesis Normalization
+
+When the user gives a plain-English idea, first translate it into these fields before running anything:
+
+- symbol scope
+- setup family or nearest existing strategy
+- trigger event
+- directional thesis
+- timeframe alignment or regime filter
+- session window
+- bounded parameter candidates
+- invalidation conditions
+
+Prefer mapping the idea onto an existing strategy family or a close template. If no current strategy can express the idea honestly, stop and say whether the gap is:
+
+- strategy implementation missing
+- feature/surface missing
+- execution surface missing
+
+Do not pretend an existing family fits if the trigger logic materially differs from the hypothesis.
 
 ## Stage Guidance
 
@@ -216,7 +299,8 @@ Surface guidance:
   - Report outcomes using the canonical fields in `docs/strategy_surface.yaml`.
 - `proposed` surface:
   - Mala may explore it.
-  - Report the research result, the exact new knobs, and the Bhiksha capability gap.
+  - Report the research result and the exact new knobs needed for honest Mala testing.
+  - Bhiksha capability gaps are optional until execution readiness is actually in scope.
   - If the user has asked for repo hygiene work, update `docs/strategy_surface_proposed.yaml`.
 - `derived` surface:
   - Keep it out of research reporting unless it must be mentioned as an internal implementation detail.
