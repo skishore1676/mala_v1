@@ -2,6 +2,7 @@
 data/
 *.parquet
 *.csv
+!config/bias_sheet_template.csv
 
 # Python
 __pycache__/

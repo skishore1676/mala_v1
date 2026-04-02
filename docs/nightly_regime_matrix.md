@@ -92,6 +92,245 @@ reason = no M3-M5 follow-up executed
 
 That means the pipeline is healthy, the scout stopped where it was supposed to stop, and deployable playbooks were not expected from that pass.
 
+## Operator Checklist
+
+This is the practical end-to-end loop.
+
+### 1. Run the nightly Mala loop
+
+```bash
+./.venv/bin/python scripts/run_nightly_regime_matrix.py
+```
+
+Read the summary literally:
+
+- if `deployment_candidates_generated = 0` and `reason = no M3-M5 follow-up executed`, that is a healthy scout-only night
+- the main outputs are still the queue, workbook, and charts
+
+### 2. Review only the M2 queue surface
+
+Open:
+
+- [data/results/nightly_regime_matrix/research_control/m2_human_review_queue.csv](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/m2_human_review_queue.csv)
+- [data/results/nightly_regime_matrix/research_control/review_bundle/human_review_workbook.xlsx](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/review_bundle/human_review_workbook.xlsx)
+- charts under [data/results/nightly_regime_matrix/research_control/charts](/Users/suman/kg_env/projects/mala_v1/data/results/nightly_regime_matrix/research_control/charts)
+
+Focus only on rows with:
+
+- `latest_stage_reached = M2`
+- `queue_status in {NEW, PENDING}`
+
+Your editable columns are:
+
+- `human_decision`
+- `human_notes`
+- `priority`
+
+Normal decisions:
+
+- `promote_to_m3`
+- `retune`
+- `expand_symbols`
+- `kill`
+
+### 3. Let the next nightly run execute approved follow-ups
+
+On the next nightly run, the agent will:
+
+- keep doing the broad M1/M2 scout
+- also consume approved queue actions under nightly caps
+
+Results by decision:
+
+- `promote_to_m3`: candidate runs through `M3 -> M4 -> M5`
+- `retune`: focused local M1/M2 search around the current config
+- `expand_symbols`: the same family/config neighborhood on Tier 2 names
+- `kill`: row becomes terminal and stops participating automatically
+
+### 4. Interpret queue state correctly
+
+There are two different ideas in one row:
+
+- `queue_status` answers whether the requested task finished
+- `latest_stage_reached` answers how far the candidate got scientifically
+
+Examples:
+
+- `queue_status = EXECUTED`, `latest_stage_reached = M2`, `latest_stage_decision = retune_completed`
+  - the retune task completed, but this is not a deployable playbook
+- `queue_status = EXECUTED`, `latest_stage_reached = M5`, `latest_stage_decision = promote`, `is_full_m1_m5_survivor = True`
+  - this is a validated survivor and is eligible to become a playbook
+
+### 5. After a candidate reaches M5 and survives, treat it as a playbook
+
+Once a row has:
+
+- `queue_status = EXECUTED`
+- `latest_stage_reached = M5`
+- `latest_stage_decision = promote`
+- `is_full_m1_m5_survivor = True`
+
+it has finished the research gauntlet for that reviewed config.
+
+What happens next:
+
+- the row stays terminal in the queue
+- its follow-up artifact directory contains the final `M3`, `M4`, and `M5` evidence
+- the latest nightly bundle playbook catalog can compile it into a first-class playbook record
+
+The queue row is done as a research task. The resulting playbook starts a different lifecycle: `active`, later maybe `stale`, later maybe `retired`.
+
+### 6. Confirm the playbook in the latest bundle
+
+Inspect the newest nightly bundle:
+
+- `playbook_catalog.json`
+- `playbook_catalog.csv`
+
+`playbook_catalog.json` now contains both:
+
+- `contexts`: the broad coverage matrix for Bhiksha/import compatibility
+- `playbooks`: first-class validated playbook records compiled from full survivors
+
+`playbook_catalog.csv` is the flat operator projection.
+
+### 7. Export your bias sheet and run the deterministic router
+
+Export your Google Sheet to CSV with at least these columns:
+
+- `Date`
+- `Symbol`
+- `Daily_Bias`
+- `Intraday_Thesis`
+- `Max_Risk_USD`
+- `Translator_Status`
+- `Armed_Playbook_ID`
+- `Notes`
+
+Recommended extra columns if you use them:
+
+- `Enabled`
+- `After_Time_ET`
+- `Only_If_Price_Crosses`
+- `Translator_Notes`
+
+A ready-to-copy template now lives at:
+
+- [config/bias_sheet_template.csv](/Users/suman/kg_env/projects/mala_v1/config/bias_sheet_template.csv)
+
+That template is based on real currently validated playbooks, for example:
+
+- `SPY + Bearish + Trend_Continuation` -> `market_impulse_spy_short_1e069526cfa4`
+- `NVDA + Bullish + Mean_Reversion` -> `elastic_band_reversion_nvda_long_184a84340d1c`
+
+The translator writes back only to the machine-owned columns:
+
+- `Translator_Status`
+- `Armed_Playbook_ID`
+- `Translator_Notes`
+
+Then run:
+
+```bash
+./.venv/bin/python scripts/run_bias_playbook_router.py \
+  --bias-inputs /path/to/bias_sheet.csv \
+  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
+  --out-dir data/results/bionic_router/<YYYY-MM-DD>
+```
+
+This writes:
+
+- a routing report CSV
+- `armed_playbooks.json`
+- one Bhiksha-ready YAML manifest per selected playbook
+
+For your live Google Sheet, the router can read `Bionic_Loop` directly using the
+same service-account pattern already used in `public_api_trading_v3`.
+
+Default direct-sheet command:
+
+```bash
+./.venv/bin/python scripts/run_bias_playbook_router.py \
+  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
+  --out-dir data/results/bionic_router/<YYYY-MM-DD>
+```
+
+Defaults built into the script:
+
+- spreadsheet id: `1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc`
+- sheet name: `Bionic_Loop`
+- credentials path: `../public_api_trading_v3/config/google-credentials.json`
+
+Recommended `.env` entries:
+
+```dotenv
+BIONIC_SHEET_ID=1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc
+BIONIC_SHEET_NAME=Bionic_Loop
+GOOGLE_API_CREDENTIALS_PATH=../public_api_trading_v3/config/google-credentials.json
+BHIKSHA_ROOT=../bhiksha
+```
+
+That mode reads the sheet and writes back only:
+
+- `Translator_Status`
+- `Armed_Playbook_ID`
+- `Translator_Notes`
+
+If you want a dry run against the live sheet without writing those columns back:
+
+```bash
+./.venv/bin/python scripts/run_bias_playbook_router.py \
+  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
+  --out-dir data/results/bionic_router/<YYYY-MM-DD> \
+  --no-sheet-update
+```
+
+If you want a one-command handoff into Bhiksha's generated deployment lane:
+
+```bash
+./.venv/bin/python scripts/run_bias_playbook_router.py \
+  --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
+  --out-dir data/results/bionic_router/<YYYY-MM-DD> \
+  --publish-bhiksha
+```
+
+That publishes the selected YAML manifests into:
+
+- `../bhiksha/config/deployments/generated`
+
+Bhiksha already loads that directory as part of its normal deployment tree, so this becomes the operational handoff point for the selected playbooks.
+
+The v1 policy is strict:
+
+- one top playbook per symbol/bias context
+- no LLM routing
+- no parameter invention
+
+### 8. Hand the selected manifest(s) to Bhiksha
+
+At this point the selected playbook is:
+
+- fully validated by Mala
+- chosen against your current bias
+- converted into a Bhiksha-ready deployment manifest
+
+Bhiksha then owns:
+
+- live 1-minute data
+- feature calculation
+- live entry trigger evaluation
+- coupled exit handling
+- execution supervision
+
+### 9. Keep the roles clean
+
+- `Mala` discovers, validates, refreshes, and retires playbooks
+- you provide the symbol/regime/thesis view
+- the deterministic router selects among already-validated playbooks
+- `Bhiksha` executes only what was armed
+
+This is the intended operating loop. Bhiksha should not be searching for strategy parameters live.
+
 The nightly loop also writes a stable research-control area under:
 
 ```text
@@ -201,6 +440,30 @@ Full M1-M5 survivors are explicit via:
 - `passes_m4`
 - `passes_m5`
 - `is_full_m1_m5_survivor`
+
+## Example: What Happens After M5
+
+A real queue row might look like:
+
+- `ticker = SPY`
+- `strategy = Market Impulse (Cross & Reclaim)`
+- `direction = short`
+- `human_decision = promote_to_m3`
+- `queue_status = EXECUTED`
+- `latest_stage_reached = M5`
+- `latest_stage_decision = promote`
+- `is_full_m1_m5_survivor = True`
+
+In that case:
+
+1. the queue task is complete and should not reopen automatically
+2. the follow-up artifact directory contains the `M3`, `M4`, and `M5` evidence
+3. the playbook compiler can turn it into a playbook record such as:
+   - `market_impulse_spy_short_<hash>`
+4. that playbook becomes eligible for the bias router
+5. if your bias sheet later says `SPY + Bearish + Trend_Continuation`, the router may arm that playbook for Bhiksha
+
+Passing `M5` does **not** mean “auto trade tomorrow.” It means “validated and eligible for live selection.”
 
 ## Contract
 

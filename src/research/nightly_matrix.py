@@ -20,6 +20,7 @@ from src.research.loop_contracts import (
     LOOP_ARTIFACT_SCHEMA_VERSION,
 )
 from src.research.loop_export import LoopArtifactExporter
+from src.research.playbooks import augment_playbook_catalog_from_queue
 from src.research.review_queue import HumanReviewQueueManager
 from src.research.run_storage import create_run_dir
 
@@ -166,6 +167,7 @@ class NightlyRegimeMatrixResult:
     family_log_paths: dict[str, Path]
     deployment_candidates_path: Path
     playbook_catalog_path: Path
+    playbook_projection_path: Path | None
     manifest_path: Path
     review_queue_path: Path
     review_history_path: Path
@@ -225,6 +227,11 @@ def run_nightly_regime_matrix(
         config=config,
         run_date=resolved_run_date,
     )
+    playbook_path, playbook_projection_path = augment_playbook_catalog_from_queue(
+        playbook_catalog_path=playbook_path,
+        queue_path=review_artifacts.queue_path,
+        playbook_projection_path=resolved_bundle_dir / "playbook_catalog.csv",
+    )
     candidates_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
     scout_only_run = config.defaults.broad_scout_max_stage == "M2"
     deployment_candidates_generated = len(candidates_payload.get("candidates", []))
@@ -265,6 +272,7 @@ def run_nightly_regime_matrix(
             PLAYBOOK_CATALOG_CONTRACT_NAME: {
                 "schema_version": LOOP_ARTIFACT_SCHEMA_VERSION,
                 "path": str(playbook_path),
+                "projection_csv_path": str(playbook_projection_path) if playbook_projection_path is not None else None,
             },
         },
     }
@@ -278,6 +286,7 @@ def run_nightly_regime_matrix(
         family_log_paths=family_log_paths,
         deployment_candidates_path=candidates_path,
         playbook_catalog_path=playbook_path,
+        playbook_projection_path=playbook_projection_path,
         manifest_path=manifest_path,
         review_queue_path=review_artifacts.queue_path,
         review_history_path=review_artifacts.history_path,

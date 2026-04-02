@@ -5,7 +5,6 @@ Uses pydantic-settings to pull from .env and provide typed, validated config.
 Gracefully handles missing or inaccessible .env files.
 """
 
-import os
 from pathlib import Path
 from typing import List
 
@@ -46,6 +45,22 @@ class Settings(BaseSettings):
     polygon_api_key: str = Field(
         default="",
         description="Polygon.io API key for market data.",
+    )
+    google_api_credentials_path: str = Field(
+        default="",
+        description="Path to Google service-account credentials JSON used for Sheets access.",
+    )
+    bionic_sheet_id: str = Field(
+        default="",
+        description="Spreadsheet id or full URL for the Bionic_Loop Google Sheet.",
+    )
+    bionic_sheet_name: str = Field(
+        default="Bionic_Loop",
+        description="Worksheet name inside the Bionic Google Sheet.",
+    )
+    bhiksha_root: str = Field(
+        default="../bhiksha",
+        description="Path to the sibling Bhiksha repo used for generated deployment publishing.",
     )
 
     # ── Data Pipeline Defaults ───────────────────────────────────────────

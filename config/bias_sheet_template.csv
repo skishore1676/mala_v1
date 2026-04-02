@@ -1,0 +1,5 @@
+Date,Symbol,Daily_Bias,Intraday_Thesis,Max_Risk_USD,Enabled,After_Time_ET,Only_If_Price_Crosses,Translator_Status,Armed_Playbook_ID,Translator_Notes,Notes
+2026-04-02,SPY,Bearish,Trend_Continuation,500,TRUE,,,,,,Maps to current validated playbook market_impulse_spy_short_1e069526cfa4
+2026-04-02,NVDA,Bullish,Mean_Reversion,750,TRUE,,,,,,Maps to current validated playbook elastic_band_reversion_nvda_long_184a84340d1c
+2026-04-02,TSLA,Bearish,Trend_Continuation,750,TRUE,10:00,,,,,Maps to current validated playbook market_impulse_tsla_short_f705f126d560 if still active
+2026-04-02,TSLA,Bearish,Mean_Reversion,500,FALSE,,,,,,Example disabled row for elastic_band_reversion_tsla_short_7c29bd6cdbac

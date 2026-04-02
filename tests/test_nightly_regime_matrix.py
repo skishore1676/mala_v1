@@ -126,6 +126,10 @@ def test_load_nightly_regime_matrix_config_and_run_bundle(tmp_path: Path) -> Non
     assert result.review_queue_path.exists()
     assert result.review_history_path.exists()
     assert result.review_workbook_path.exists()
+    assert result.playbook_projection_path is not None
+    assert result.playbook_projection_path.exists()
+    assert "playbook_count" in playbook_catalog
+    assert "playbooks" in playbook_catalog
     assert playbook_catalog["contexts"]["TSLA|bullish_trend_intraday|intraday"]["coverage_status"] == "researched_with_survivors"
     assert playbook_catalog["contexts"]["IWM|bullish_mean_reversion_intraday|intraday"]["proposed_candidates"]
     assert playbook_catalog["contexts"]["TSLA|bearish_mean_reversion_intraday|intraday"]["coverage_status"] == "researched_no_survivors"
@@ -239,6 +243,7 @@ def test_run_nightly_regime_matrix_merges_m2_only_scout_into_queue(tmp_path: Pat
     )
 
     deployment_candidates = json.loads(result.deployment_candidates_path.read_text(encoding="utf-8"))
+    playbook_catalog = json.loads(result.playbook_catalog_path.read_text(encoding="utf-8"))
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     queue_rows = _read_csv_rows(result.review_queue_path)
 
@@ -260,6 +265,8 @@ def test_run_nightly_regime_matrix_merges_m2_only_scout_into_queue(tmp_path: Pat
     assert queue_rows[0]["passes_m2"] == "True"
     assert queue_rows[0]["passes_m3"] == "False"
     assert queue_rows[0]["latest_stage_reached"] == "M2"
+    assert playbook_catalog["playbook_count"] == 0
+    assert playbook_catalog["playbooks"] == []
 
 
 def test_run_family_research_failure_references_log(tmp_path: Path, monkeypatch) -> None:
