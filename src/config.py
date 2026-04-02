@@ -58,6 +58,14 @@ class Settings(BaseSettings):
         default="Bionic_Loop",
         description="Worksheet name inside the Bionic Google Sheet.",
     )
+    manual_entry_sheet_id: str = Field(
+        default="",
+        description="Spreadsheet id or full URL for the entry_v1 Google Sheet.",
+    )
+    manual_entry_sheet_name: str = Field(
+        default="entry_v1",
+        description="Worksheet name inside the manual entry Google Sheet.",
+    )
     bhiksha_root: str = Field(
         default="../bhiksha",
         description="Path to the sibling Bhiksha repo used for generated deployment publishing.",

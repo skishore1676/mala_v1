@@ -236,7 +236,7 @@ The translator writes back only to the machine-owned columns:
 - `Armed_Playbook_ID`
 - `Translator_Notes`
 
-Then run:
+Legacy playbook-only routing remains available:
 
 ```bash
 ./.venv/bin/python scripts/run_bias_playbook_router.py \
@@ -251,21 +251,23 @@ This writes:
 - `armed_playbooks.json`
 - one Bhiksha-ready YAML manifest per selected playbook
 
-For your live Google Sheet, the router can read `Bionic_Loop` directly using the
-same service-account pattern already used in `public_api_trading_v3`.
+For the unified Bionic loop, the preferred path now compiles one session
+authority file from both `Bionic_Loop` and `entry_v1`.
 
 Default direct-sheet command:
 
 ```bash
-./.venv/bin/python scripts/run_bias_playbook_router.py \
+./.venv/bin/python scripts/compile_active_session.py \
   --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
-  --out-dir data/results/bionic_router/<YYYY-MM-DD>
+  --out-dir data/results/active_session/<YYYY-MM-DD> \
+  --manual-google-sheet-id <entry_v1_sheet_id>
 ```
 
 Defaults built into the script:
 
 - spreadsheet id: `1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc`
 - sheet name: `Bionic_Loop`
+- manual sheet name: `entry_v1`
 - credentials path: `../public_api_trading_v3/config/google-credentials.json`
 
 Recommended `.env` entries:
@@ -273,11 +275,20 @@ Recommended `.env` entries:
 ```dotenv
 BIONIC_SHEET_ID=1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc
 BIONIC_SHEET_NAME=Bionic_Loop
+MANUAL_ENTRY_SHEET_ID=<entry_v1_sheet_id>
+MANUAL_ENTRY_SHEET_NAME=entry_v1
 GOOGLE_API_CREDENTIALS_PATH=../public_api_trading_v3/config/google-credentials.json
 BHIKSHA_ROOT=../bhiksha
 ```
 
-That mode reads the sheet and writes back only:
+That mode reads both sheets and:
+
+- routes `Bionic_Loop` into one top validated playbook per symbol/bias context
+- compiles eligible `entry_v1` rows into `manual_trigger` deployments
+- lets manual rows override playbook rows on the same symbol
+- writes one `active_session.json`
+
+It writes back only to the Bionic machine-owned columns:
 
 - `Translator_Status`
 - `Armed_Playbook_ID`
@@ -286,30 +297,39 @@ That mode reads the sheet and writes back only:
 If you want a dry run against the live sheet without writing those columns back:
 
 ```bash
-./.venv/bin/python scripts/run_bias_playbook_router.py \
+./.venv/bin/python scripts/compile_active_session.py \
   --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
-  --out-dir data/results/bionic_router/<YYYY-MM-DD> \
+  --out-dir data/results/active_session/<YYYY-MM-DD> \
+  --manual-google-sheet-id <entry_v1_sheet_id> \
   --no-sheet-update
 ```
 
-If you want a one-command handoff into Bhiksha's generated deployment lane:
+If you want a one-command handoff into Bhiksha's session-payload lane:
 
 ```bash
-./.venv/bin/python scripts/run_bias_playbook_router.py \
+./.venv/bin/python scripts/compile_active_session.py \
   --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
-  --out-dir data/results/bionic_router/<YYYY-MM-DD> \
+  --out-dir data/results/active_session/<YYYY-MM-DD> \
+  --manual-google-sheet-id <entry_v1_sheet_id> \
   --publish-bhiksha
 ```
 
-That publishes the selected YAML manifests into:
+That publishes the compiled session file into:
 
-- `../bhiksha/config/deployments/generated`
+- `../bhiksha/artifacts/playbook/active_session.json`
 
-Bhiksha already loads that directory as part of its normal deployment tree, so this becomes the operational handoff point for the selected playbooks.
+Bhiksha can then boot directly from that one file with:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m bhiksha.tools.trade_session \
+  --session-payload artifacts/playbook/active_session.json
+```
 
 The v1 policy is strict:
 
 - one top playbook per symbol/bias context
+- one active deployment per symbol in the final session file
+- manual override wins on symbol conflicts
 - no LLM routing
 - no parameter invention
 
