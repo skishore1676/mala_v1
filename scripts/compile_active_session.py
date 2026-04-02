@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manual-google-sheet-name", default=DEFAULT_MANUAL_SHEET_NAME)
     parser.add_argument("--google-credentials", default=_default_credentials_path())
     parser.add_argument("--no-bionic-sheet-update", action="store_true")
+    parser.add_argument("--live-authorized", action="store_true", help="Emit session deployments with execution.shadow_only=false.")
     parser.add_argument("--publish-bhiksha", action="store_true")
     parser.add_argument("--bhiksha-root", default=DEFAULT_BHIKSHA_ROOT)
     return parser.parse_args()
@@ -67,12 +68,14 @@ def main() -> None:
         playbook_catalog_path=args.playbook_catalog,
         out_dir=args.out_dir,
         update_bionic_sheet=not args.no_bionic_sheet_update,
+        live_authorized=args.live_authorized,
     )
     print(f"ACTIVE_SESSION={session_path}")
     print(f"ACTIVE_SESSION_REPORT={report_path}")
     print(f"DEPLOYMENT_COUNT={payload['summary']['deployment_count']}")
     print(f"MANUAL_DEPLOYMENT_COUNT={payload['summary']['manual_deployment_count']}")
     print(f"PLAYBOOK_DEPLOYMENT_COUNT={payload['summary']['playbook_deployment_count']}")
+    print(f"AUTHORIZATION_MODE={payload['authorization_mode']}")
     if args.publish_bhiksha:
         published = publish_active_session_to_bhiksha(
             session_payload_path=session_path,

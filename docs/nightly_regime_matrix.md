@@ -263,6 +263,10 @@ Default direct-sheet command:
   --manual-google-sheet-id <entry_v1_sheet_id>
 ```
 
+For live-authorized session payloads, add `--live-authorized`. That flips
+`execution.shadow_only` to `false` in the compiled session file without
+changing the underlying playbook catalog.
+
 Defaults built into the script:
 
 - spreadsheet id: `1cJPWfkQB6pp91TAFNT86R5Pi1cUfzCgT3bUWgjY6rbc`
@@ -288,6 +292,16 @@ That mode reads both sheets and:
 - lets manual rows override playbook rows on the same symbol
 - writes one `active_session.json`
 
+`entry_v1` rows are only considered eligible when:
+
+- `status` is blank or `PENDING`
+- `is_signal_active` is `1` for open-ended active rows, or `2` for same-day-only rows
+- `idea_date` is today when `is_signal_active = 2`
+- the row is not already terminal (`TRIGGERED`, `EXECUTED`, `DONE`, `CLOSED`, `CANCELLED`, `ERROR`)
+
+A clean operational `entry_v1` sheet should contain only rows you actually want
+considered for the current session. Historical rows should be archived elsewhere.
+
 It writes back only to the Bionic machine-owned columns:
 
 - `Translator_Status`
@@ -301,7 +315,7 @@ If you want a dry run against the live sheet without writing those columns back:
   --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/active_session/<YYYY-MM-DD> \
   --manual-google-sheet-id <entry_v1_sheet_id> \
-  --no-sheet-update
+  --no-bionic-sheet-update
 ```
 
 If you want a one-command handoff into Bhiksha's session-payload lane:
@@ -311,6 +325,7 @@ If you want a one-command handoff into Bhiksha's session-payload lane:
   --playbook-catalog data/results/nightly_regime_matrix/<YYYY-MM-DD>/nightly_regime_matrix/<HH-MM-SS>/playbook_catalog.json \
   --out-dir data/results/active_session/<YYYY-MM-DD> \
   --manual-google-sheet-id <entry_v1_sheet_id> \
+  --live-authorized \
   --publish-bhiksha
 ```
 

@@ -123,6 +123,7 @@ def compile_active_session_from_rows(
     bias_source: str = "in_memory",
     manual_source: str = "in_memory",
     session_date: date | None = None,
+    live_authorized: bool = False,
 ) -> tuple[Path, Path, dict[str, Any]]:
     target_dir = Path(out_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -156,7 +157,7 @@ def compile_active_session_from_rows(
 
     deployments: list[dict[str, Any]] = []
     for entry in manual_by_symbol.values():
-        deployments.append(build_manual_trigger_manifest(entry))
+        deployments.append(_apply_session_authorization(build_manual_trigger_manifest(entry), live_authorized=live_authorized))
 
     for item in armed_payloads.get("armed_playbooks", []):
         manifest = dict(item["manifest"])
@@ -174,7 +175,7 @@ def compile_active_session_from_rows(
             continue
         manifest.setdefault("source", {})
         manifest["source"]["origin"] = "mala_playbook"
-        deployments.append(manifest)
+        deployments.append(_apply_session_authorization(manifest, live_authorized=live_authorized))
 
     payload = {
         "contract_name": ACTIVE_SESSION_CONTRACT_NAME,
@@ -182,6 +183,7 @@ def compile_active_session_from_rows(
         "session_id": f"active_session_{effective_date.isoformat()}",
         "session_date": effective_date.isoformat(),
         "generated_at": datetime.now(UTC).isoformat(),
+        "authorization_mode": "live" if live_authorized else "shadow",
         "source": {
             "bionic": bias_source,
             "manual": manual_source,
@@ -195,6 +197,9 @@ def compile_active_session_from_rows(
             "armed_bias_count": sum(1 for selection in selections if selection.status == "armed"),
             "eligible_manual_row_count": len(eligible_manual_entries),
             "suppressed_count": len(suppressed),
+            "live_authorized_deployment_count": sum(
+                1 for deployment in deployments if deployment.get("execution", {}).get("shadow_only") is False
+            ),
         },
         "suppressed": suppressed,
         "deployments": deployments,
@@ -208,6 +213,7 @@ def compile_active_session_from_rows(
         "bias_routing_report_path": str(routing_report_path.resolve()),
         "manual_source": manual_source,
         "bionic_source": bias_source,
+        "authorization_mode": payload["authorization_mode"],
         "selections": [selection.model_dump(mode="json") for selection in selections],
         "eligible_manual_entries": [entry.model_dump(mode="json") for entry in eligible_manual_entries],
         "suppressed": suppressed,
@@ -227,6 +233,7 @@ def compile_active_session_from_google_sheets(
     playbook_catalog_path: str | Path,
     out_dir: str | Path,
     update_bionic_sheet: bool = True,
+    live_authorized: bool = False,
 ) -> tuple[Path, Path, dict[str, Any]]:
     credentials = Path(credentials_path)
     bionic_client = GoogleSheetTableClient(
@@ -252,6 +259,7 @@ def compile_active_session_from_google_sheets(
         out_dir=out_dir,
         bias_source=f"google_sheet:{spreadsheet_id_from_url(bionic_spreadsheet_id)}:{bionic_sheet_name}",
         manual_source=f"google_sheet:{spreadsheet_id_from_url(manual_spreadsheet_id)}:{manual_sheet_name}",
+        live_authorized=live_authorized,
     )
 
     if update_bionic_sheet:
@@ -457,6 +465,16 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _apply_session_authorization(manifest: dict[str, Any], *, live_authorized: bool) -> dict[str, Any]:
+    payload = json.loads(json.dumps(manifest))
+    payload.setdefault("execution", {})
+    payload["execution"]["shadow_only"] = not live_authorized
+    payload.setdefault("source", {})
+    payload["source"].setdefault("metadata", {})
+    payload["source"]["metadata"]["authorization_mode"] = "live" if live_authorized else "shadow"
+    return payload
 
 
 __all__ = [

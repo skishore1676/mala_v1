@@ -96,6 +96,75 @@ def test_compile_active_session_manual_override_suppresses_playbook(tmp_path: Pa
     assert deployment["strategy"]["key"] == "manual_trigger"
     assert deployment["source"]["origin"] == "operator_manual"
     assert payload["suppressed"][0]["reason"] == "manual_override"
+    assert deployment["execution"]["shadow_only"] is True
+    assert payload["authorization_mode"] == "shadow"
+
+
+def test_compile_active_session_live_authorized_marks_deployments_live(tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.csv"
+    artifact_dir = tmp_path / "followup"
+    _write_full_survivor_artifacts(
+        artifact_dir,
+        strategy="Market Impulse (Cross & Reclaim)",
+        ticker="TSLA",
+        direction="short",
+    )
+    _write_rows(
+        queue_path,
+        [
+            _full_survivor_row(
+                ticker="TSLA",
+                strategy="Market Impulse (Cross & Reclaim)",
+                family="market_impulse",
+                direction="short",
+                artifact_dir=artifact_dir,
+                config_json={
+                    "entry_buffer_minutes": 3,
+                    "entry_window_minutes": 45,
+                    "regime_timeframe": "30m",
+                },
+            )
+        ],
+    )
+    catalog_path = tmp_path / "playbook_catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                **build_contract_metadata(PLAYBOOK_CATALOG_CONTRACT_NAME),
+                "generated_at": "2026-04-01T00:00:00+00:00",
+                "contexts": {},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    augment_playbook_catalog_from_queue(playbook_catalog_path=catalog_path, queue_path=queue_path)
+
+    bias = BiasInputRow.model_validate(
+        {
+            "date": "2026-04-02",
+            "symbol": "TSLA",
+            "daily_bias": "Bearish",
+            "intraday_thesis": "Trend_Continuation",
+            "max_risk_usd": 750,
+        }
+    )
+
+    _, _, payload = compile_active_session_from_rows(
+        biases=[bias],
+        manual_entries=[],
+        playbook_catalog_path=catalog_path,
+        out_dir=tmp_path / "session",
+        session_date=date(2026, 4, 2),
+        live_authorized=True,
+    )
+
+    assert payload["authorization_mode"] == "live"
+    assert payload["summary"]["live_authorized_deployment_count"] == 1
+    assert payload["deployments"][0]["execution"]["shadow_only"] is False
+    assert payload["deployments"][0]["source"]["metadata"]["authorization_mode"] == "live"
 
 
 def test_publish_active_session_to_bhiksha_copies_payload(tmp_path: Path) -> None:
