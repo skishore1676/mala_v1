@@ -507,6 +507,80 @@ def test_promote_to_m3_marks_row_executed_via_followup_execution(tmp_path: Path)
     assert updated[0]["latest_stage_reached"] == "M4"
 
 
+def test_replay_followups_retries_error_rows_and_clears_stale_error_notes(tmp_path: Path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    manager = HumanReviewQueueManager(
+        tmp_path / "control",
+        frame_loader=lambda ticker, start, end: _sample_opening_drive_frame(str(ticker)),
+        enricher=lambda frame, required: frame,
+        followup_executor=lambda row, decision, config, artifact_dir: calls.append(
+            (str(row["candidate_key"]), decision)
+        ) or {
+            "queue_status": QUEUE_STATUS_EXECUTED,
+            "passes_m3": True,
+            "passes_m4": True,
+            "passes_m5": True,
+            "latest_stage_reached": "M5",
+            "latest_stage_decision": "promote",
+            "latest_artifact_dir": str(artifact_dir),
+        },
+    )
+    rows = [
+        {
+            "candidate_key": "needs_replay",
+            "ticker": "SPY",
+            "strategy": "Opening Drive Classifier",
+            "direction": "long",
+            "queue_status": QUEUE_STATUS_EXECUTED,
+            "human_decision": "promote_to_m3",
+            "human_notes": "operator note\n[2026-04-01] follow-up error: old bug",
+            "priority": 1,
+            "human_updated_at": "2026-04-01T00:00:00+00:00",
+            "passes_m1": True,
+            "passes_m2": True,
+            "passes_m3": False,
+            "passes_m4": False,
+            "passes_m5": False,
+            "last_seen_run_date": "2026-04-01",
+        },
+        {
+            "candidate_key": "leave_alone",
+            "ticker": "QQQ",
+            "strategy": "Opening Drive Classifier",
+            "direction": "long",
+            "queue_status": QUEUE_STATUS_EXECUTED,
+            "human_decision": "promote_to_m3",
+            "human_notes": "clean row",
+            "priority": 0,
+            "human_updated_at": "2026-04-01T00:00:00+00:00",
+            "passes_m1": True,
+            "passes_m2": True,
+            "passes_m3": False,
+            "passes_m4": False,
+            "passes_m5": False,
+            "last_seen_run_date": "2026-04-01",
+        },
+    ]
+    manager._write_rows(manager.paths.queue_path, rows)
+    manager._write_snapshot(rows)
+
+    updated, replayed = manager.replay_followups(
+        config=NightlyRegimeMatrixConfig(research_control_root=str(tmp_path / "control")),
+        run_date=date(2026, 4, 2),
+        only_error_rows=True,
+    )
+
+    assert replayed == 1
+    assert calls == [("needs_replay", "promote_to_m3")]
+    by_key = {row["candidate_key"]: row for row in updated}
+    assert by_key["needs_replay"]["queue_status"] == QUEUE_STATUS_EXECUTED
+    assert by_key["needs_replay"]["latest_stage_reached"] == "M5"
+    assert by_key["needs_replay"]["passes_m5"] is True
+    assert by_key["needs_replay"]["human_notes"] == "operator note"
+    assert by_key["leave_alone"]["human_notes"] == "clean row"
+
+
 def test_review_bundle_generation_writes_required_views(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     run_dir = tmp_path / "family_run"

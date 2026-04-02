@@ -203,6 +203,66 @@ class HumanReviewQueueManager:
             followup_actions_run_count=followup_actions_run_count,
         )
 
+    def replay_followups(
+        self,
+        *,
+        config: Any,
+        run_date: date,
+        candidate_keys: list[str] | None = None,
+        only_error_rows: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
+        rows = self._load_rows(self.paths.queue_path)
+        if not rows:
+            self._write_review_bundle(rows)
+            return rows, 0
+
+        selected_keys = set(candidate_keys or [])
+        if selected_keys:
+            missing = selected_keys - {str(row.get("candidate_key", "")) for row in rows}
+            if missing:
+                raise ValueError(f"Unknown candidate_key(s): {sorted(missing)}")
+
+        replayed = 0
+        by_key = {str(row["candidate_key"]): dict(row) for row in rows if row.get("candidate_key")}
+        for candidate_key, target in by_key.items():
+            if selected_keys and candidate_key not in selected_keys:
+                continue
+            if only_error_rows and not _has_followup_error_note(target.get("human_notes", "")):
+                continue
+            decision = str(target.get("human_decision", "") or "").strip()
+            if decision not in ACTIONABLE_HUMAN_DECISIONS:
+                continue
+
+            target["queue_status"] = QUEUE_STATUS_PENDING
+            target["human_notes"] = _strip_followup_error_notes(target.get("human_notes", ""))
+            try:
+                result = self._run_followup(
+                    row=target,
+                    decision=decision,
+                    config=config,
+                    run_date=run_date,
+                )
+            except Exception as exc:  # pragma: no cover - exercised via targeted tests
+                target["queue_status"] = QUEUE_STATUS_ERROR
+                target["latest_stage_decision"] = f"error:{type(exc).__name__}"
+                target["human_notes"] = _append_note(
+                    target.get("human_notes", ""),
+                    f"[{run_date.isoformat()}] follow-up error: {exc}",
+                )
+                target["last_action_run_date"] = run_date.isoformat()
+            else:
+                target.update(result)
+                target["last_action_run_date"] = run_date.isoformat()
+                target = self._normalize_row(target, run_date=run_date, manual_override=False)
+                by_key[candidate_key] = target
+            replayed += 1
+
+        ordered = self._sort_rows(list(by_key.values()))
+        self._write_rows(self.paths.queue_path, ordered)
+        self._write_snapshot(ordered)
+        self._write_review_bundle(ordered)
+        return ordered, replayed
+
     def collect_observations(
         self,
         *,
@@ -1435,6 +1495,19 @@ def _intish(value: Any, *, default: int = 0) -> int:
 
 def _append_note(existing: str, note: str) -> str:
     return note if not existing else f"{existing}\n{note}"
+
+
+def _has_followup_error_note(notes: Any) -> bool:
+    return "follow-up error:" in str(notes or "")
+
+
+def _strip_followup_error_notes(notes: Any) -> str:
+    cleaned = [
+        line.strip()
+        for line in str(notes or "").splitlines()
+        if "follow-up error:" not in line
+    ]
+    return "\n".join(line for line in cleaned if line)
 
 
 def _write_frame_if_not_empty(frame: pl.DataFrame, path: Path) -> None:
