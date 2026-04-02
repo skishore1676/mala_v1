@@ -91,9 +91,11 @@ Hypothesis-file contract:
 - If `repo_change_policy` is `implement_research_surface`, create a fresh `codex/` branch before editing repo code.
 - When implementing research-surface changes, stop after:
   - making the minimal bounded code change,
-  - running relevant validation,
+  - running relevant targeted tests or validation,
   - updating the hypothesis file with what changed,
   - and reporting the branch name and changed files.
+- Keep all repo edits on the newly created branch.
+- Do not switch back to the originating branch before stopping if uncommitted repo changes remain.
 - Do not merge automatically.
 - Respect file status fields:
   - `pending`: eligible to run
@@ -146,6 +148,8 @@ Gate logging contract:
 - If using a one-shot command instead of a reusable runner, still write a stage note into the run output directory before moving to the next gate.
 - Never advance a candidate to the next gate without leaving behind a readable stage outcome.
 - If a stage has mixed outcomes across candidates, say so explicitly and record both the survivors and the failures.
+- Keep the stage note's next action aligned with the top-level hypothesis disposition and stage boundary.
+- If the hypothesis remains in `M1 retune`, do not suggest an `M2` handoff in the stage note.
 
 Tooling notes:
 
@@ -201,6 +205,8 @@ File-driven output preference:
    Repo-change handling:
    - If the current surface cannot test the hypothesis honestly and `repo_change_policy` is `propose`, stop and report the minimal required change.
    - If the current surface cannot test the hypothesis honestly and `repo_change_policy` is `implement_research_surface`, first create a fresh `codex/` branch, then implement only the smallest Mala research-surface change needed to resume honest testing.
+   - When repo edits are made, run targeted tests for the changed strategy/research surface before concluding the run.
+   - Leave the working tree on the created branch if any uncommitted edits remain.
    - Keep execution/live/deployment changes out of scope unless the user explicitly expands the request.
 
 6. Ask Newton only for what the strategy needs.
