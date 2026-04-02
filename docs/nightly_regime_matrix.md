@@ -368,6 +368,17 @@ That publishes the compiled session file into:
 
 - `../bhiksha/artifacts/playbook/active_session.json`
 
+The preferred operator path now starts from Bhiksha rather than calling Mala
+directly:
+
+```bash
+cd /Users/suman/kg_env/projects/bhiksha
+PYTHONPATH=src .venv/bin/python -m bhiksha.tools.bionic_session prepare
+```
+
+That wrapper still calls Mala's session compiler under the hood, but it keeps
+the pre-open loop one command from the execution repo.
+
 Bhiksha can then boot directly from that one file with:
 
 ```bash
