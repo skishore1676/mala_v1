@@ -265,6 +265,7 @@ class TestOpeningDriveClassifierStrategy:
         trigger_volume: int = 3200,
         trigger_jerk: float = 0.6,
         trigger_directional_mass: float = 450.0,
+        trigger_regime: str = "bullish",
     ) -> pl.DataFrame:
         rows: list[dict] = []
         day_start = datetime(2025, 1, 2, 14, 30)  # 09:30 ET in UTC
@@ -283,6 +284,7 @@ class TestOpeningDriveClassifierStrategy:
                 "accel_1m": 0.8 if i == 30 else 0.0,
                 "jerk_1m": trigger_jerk if i == 30 else 0.0,
                 "directional_mass": trigger_directional_mass if i == 30 else 10.0,
+                "impulse_regime_5m": trigger_regime,
             })
         return pl.DataFrame(rows)
 
@@ -354,3 +356,29 @@ class TestOpeningDriveClassifierStrategy:
 
         assert with_mass.filter(pl.col("signal")).is_empty()
         assert without_mass.filter(pl.col("signal")).height == 1
+
+    def test_regime_confirmation_requires_directional_confluence(self) -> None:
+        bearish_df = self._build_single_day_continue_candidate(trigger_regime="bearish")
+        bullish_df = self._build_single_day_continue_candidate(trigger_regime="bullish")
+
+        with_regime_bearish = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_regime_filter=True,
+            regime_timeframe="5m",
+        ).generate_signals(bearish_df)
+        with_regime_bullish = OpeningDriveClassifierStrategy(
+            opening_window_minutes=25,
+            entry_start_offset_minutes=30,
+            entry_end_offset_minutes=120,
+            min_drive_return_pct=0.001,
+            volume_multiplier=1.2,
+            use_regime_filter=True,
+            regime_timeframe="5m",
+        ).generate_signals(bullish_df)
+
+        assert with_regime_bearish.filter(pl.col("signal")).is_empty()
+        assert with_regime_bullish.filter(pl.col("signal")).height == 1

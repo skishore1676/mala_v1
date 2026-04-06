@@ -1,0 +1,21 @@
+{
+  "run_dir": "research/hypotheses/artifacts/iwm-opening-range-regime-continuation/2026-04-02T191830",
+  "summary": {
+    "strategy": "Opening Drive Classifier",
+    "config_count": 8,
+    "max_configs": 8,
+    "ticker_count": 1,
+    "detail_rows": 14,
+    "aggregate_rows": 8,
+    "parameter_count": 12,
+    "requested_config_count": 8,
+    "duplicate_config_count": 0,
+    "invalid_config_count": 0,
+    "stage_objective": "find_edge_anywhere"
+  },
+  "artifact_paths": {
+    "detail": "research/hypotheses/artifacts/iwm-opening-range-regime-continuation/2026-04-02T191830/M1_parameter_sweep_detail.csv",
+    "aggregate": "research/hypotheses/artifacts/iwm-opening-range-regime-continuation/2026-04-02T191830/M1_parameter_sweep_aggregate.csv"
+  },
+  "aggregate_rows": 8
+}

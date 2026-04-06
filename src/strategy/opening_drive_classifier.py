@@ -53,6 +53,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         volume_multiplier: float = 1.2,
         use_directional_mass: bool = True,
         use_jerk_confirmation: bool = True,
+        use_regime_filter: bool = False,
+        regime_timeframe: str = "5m",
         allow_long: bool = True,
         allow_short: bool = True,
         enable_continue: bool = True,
@@ -75,6 +77,9 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             else use_directional_mass
         )
         self.use_jerk_confirmation = use_jerk_confirmation
+        self.use_regime_filter = use_regime_filter
+        self.regime_timeframe = regime_timeframe
+        self.regime_col = f"impulse_regime_{self.regime_timeframe}"
         self.allow_long = allow_long
         self.allow_short = allow_short
         self.enable_continue = enable_continue
@@ -102,12 +107,14 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             required.add(jerk_column_name(self.kinematic_periods_back))
         if self.use_directional_mass:
             required.add("directional_mass")
+        if self.use_regime_filter:
+            required.add(self.regime_col)
         return required
 
     @property
     def parameter_space(self) -> dict[str, list[Any]]:
         return {
-            "opening_window_minutes": [20, 25, 30],
+            "opening_window_minutes": [15, 20, 25, 30],
             "entry_start_offset_minutes": [20, 25, 30],
             "entry_end_offset_minutes": [90, 120],
             "min_drive_return_pct": [0.0015, 0.0020],
@@ -117,6 +124,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "volume_multiplier": [1.2, 1.4],
             "use_directional_mass": [True, False],
             "use_jerk_confirmation": [True, False],
+            "use_regime_filter": [False, True],
+            "regime_timeframe": ["5m"],
         }
 
     @property
@@ -130,7 +139,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
                 ParameterSpec(
                     name="opening_window_minutes",
                     type="discrete",
-                    domain=DomainSpec(values=[20, 25, 30]),
+                    domain=DomainSpec(values=[15, 20, 25, 30]),
                     default=self.opening_window_minutes,
                     prior_center=25,
                 ),
@@ -197,13 +206,31 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
                     default=self.use_jerk_confirmation,
                     prior_center=True,
                 ),
+                ParameterSpec(
+                    name="use_regime_filter",
+                    type="categorical",
+                    domain=DomainSpec(values=[True, False]),
+                    default=self.use_regime_filter,
+                    prior_center=False,
+                ),
+                ParameterSpec(
+                    name="regime_timeframe",
+                    type="categorical",
+                    domain=DomainSpec(values=["5m"]),
+                    default=self.regime_timeframe,
+                    prior_center="5m",
+                ),
             ],
             constraints=ConstraintSpec(
                 gating_conditions=[
                     GatingCondition(
                         parameter="volume_multiplier",
                         requires={"use_volume_filter": True},
-                    )
+                    ),
+                    GatingCondition(
+                        parameter="regime_timeframe",
+                        requires={"use_regime_filter": True},
+                    ),
                 ],
                 monotonic_ordering=[
                     MonotonicOrdering(
@@ -235,6 +262,8 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             "volume_multiplier": self.volume_multiplier,
             "use_directional_mass": self.use_directional_mass,
             "use_jerk_confirmation": self.use_jerk_confirmation,
+            "use_regime_filter": self.use_regime_filter,
+            "regime_timeframe": self.regime_timeframe,
             "allow_long": self.allow_long,
             "allow_short": self.allow_short,
             "enable_continue": self.enable_continue,
@@ -332,6 +361,12 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
         short_jerk_gate = (
             pl.col(jerk_col) < 0 if self.use_jerk_confirmation else pl.lit(True)
         )
+        bullish_regime_gate = (
+            pl.col(self.regime_col) == "bullish" if self.use_regime_filter else pl.lit(True)
+        )
+        bearish_regime_gate = (
+            pl.col(self.regime_col) == "bearish" if self.use_regime_filter else pl.lit(True)
+        )
 
         continue_long = (
             in_entry_window
@@ -341,6 +376,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & long_jerk_gate
             & volume_gate
             & long_mass_gate
+            & bullish_regime_gate
         )
         continue_short = (
             in_entry_window
@@ -350,6 +386,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & short_jerk_gate
             & volume_gate
             & short_mass_gate
+            & bearish_regime_gate
         )
         fail_long = (
             in_entry_window
@@ -359,6 +396,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & long_jerk_gate
             & volume_gate
             & long_mass_gate
+            & bullish_regime_gate
         )
         fail_short = (
             in_entry_window
@@ -368,6 +406,7 @@ class OpeningDriveClassifierStrategy(BaseStrategy):
             & short_jerk_gate
             & volume_gate
             & short_mass_gate
+            & bearish_regime_gate
         )
 
         long_raw = (

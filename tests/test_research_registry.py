@@ -572,8 +572,10 @@ def test_opening_drive_catalog_entry_exposes_constraints_and_priors(tmp_path: Pa
     assert parameter_map["use_volume_filter"].prior_center is True
     assert parameter_map["use_directional_mass"].prior_center is True
     assert parameter_map["use_jerk_confirmation"].prior_center is True
+    assert parameter_map["use_regime_filter"].prior_center is False
     assert entry.search_spec.constraints.gating_conditions == [
-        GatingCondition(parameter="volume_multiplier", requires={"use_volume_filter": True})
+        GatingCondition(parameter="volume_multiplier", requires={"use_volume_filter": True}),
+        GatingCondition(parameter="regime_timeframe", requires={"use_regime_filter": True}),
     ]
     assert entry.search_spec.constraints.monotonic_ordering[0].parameters == [
         "opening_window_minutes",

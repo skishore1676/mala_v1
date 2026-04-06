@@ -321,6 +321,14 @@ strategy_families:
         bhiksha_path: strategy.params.use_jerk_confirmation
         type: boolean
         description: Enables or disables the jerk-sign confirmation gate.
+      - id: use_regime_filter
+        bhiksha_path: strategy.params.use_regime_filter
+        type: boolean
+        description: Enables or disables directional confluence against the selected Market Impulse regime timeframe.
+      - id: regime_timeframe
+        bhiksha_path: strategy.params.regime_timeframe
+        type: string
+        description: Market Impulse regime timeframe used for directional confluence when `use_regime_filter` is enabled.
       - id: allow_long
         bhiksha_path: strategy.params.allow_long
         type: boolean

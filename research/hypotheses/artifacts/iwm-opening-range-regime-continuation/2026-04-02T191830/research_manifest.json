@@ -1,0 +1,36 @@
+{
+  "stages": [
+    {
+      "artifacts": {
+        "aggregate": "research/hypotheses/artifacts/iwm-opening-range-regime-continuation/2026-04-02T191830/M1_parameter_sweep_aggregate.csv",
+        "detail": "research/hypotheses/artifacts/iwm-opening-range-regime-continuation/2026-04-02T191830/M1_parameter_sweep_detail.csv"
+      },
+      "context": {
+        "hypothesis": "iwm-opening-range-regime-continuation",
+        "repo_change_policy": "implement_research_surface",
+        "ticker_scope": [
+          "IWM"
+        ]
+      },
+      "decision": "retune",
+      "next_action": "Retune opening-drive thresholds and optional filters within M1 while keeping regime confluence fixed at 5m.",
+      "rationale": "Bounded M1 sweep executed with the new 15-minute opening window and 5-minute regime confluence surface; signal quality stayed below discovery thresholds, so another bounded retune is required before any stage advance.",
+      "recorded_at": "2026-04-03T00:18:32.470586+00:00",
+      "stage": "M1",
+      "summary": {
+        "aggregate_rows": 8,
+        "config_count": 8,
+        "detail_rows": 14,
+        "duplicate_config_count": 0,
+        "invalid_config_count": 0,
+        "max_configs": 8,
+        "parameter_count": 12,
+        "requested_config_count": 8,
+        "stage_objective": "find_edge_anywhere",
+        "strategy": "Opening Drive Classifier",
+        "ticker_count": 1
+      },
+      "tool_name": "parameter_sweep"
+    }
+  ]
+}
