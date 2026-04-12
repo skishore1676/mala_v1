@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import polars as pl
 
@@ -10,6 +11,7 @@ from src.oracle.metrics import MetricsCalculator
 from src.research.stages.candidates import build_candidate_strategy, candidate_identity_columns
 from src.research.stages.directional import (
     canonical_directional_snapshot_windows,
+    resolve_directional_metric_columns,
     resolve_evaluation_window,
 )
 from src.research.stages.walk_forward import evaluate_df
@@ -86,6 +88,55 @@ def promoted_candidates_from_gate_report(gate_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def extract_signal_trade_rows(
+    df_eval: pl.DataFrame,
+    *,
+    direction: str,
+    evaluation_window: int | None,
+) -> list[dict[str, object]]:
+    """Return one dict per realized signal row in ``df_eval``.
+
+    Used by ``run_holdout_validation_for_candidates`` when
+    ``retain_trade_rows=True`` so that downstream per-regime slicing
+    (``src.research.catalog_regime_performance``) has the raw trade
+    shape to bucket by market regime. The shape is deliberately
+    minimal — just trade_date, signal_direction, mfe, mae — because
+    that is all the slicer needs. Callers that want richer context
+    (entry price, hold time, etc.) should take a second pass.
+
+    Signal rows are already filtered to rows where ``signal == True``
+    and where ``mfe/mae/signal_direction`` are non-null, matching the
+    filter ``evaluate_df`` applies internally.
+    """
+    mfe_col, mae_col, _ = resolve_directional_metric_columns(
+        df_eval,
+        evaluation_window=evaluation_window,
+        allow_eod_fallback=evaluation_window is None,
+    )
+    base = df_eval.filter(pl.col("signal")).drop_nulls(
+        subset=[mfe_col, mae_col, "signal_direction"]
+    )
+    if direction != "combined":
+        base = base.filter(pl.col("signal_direction") == direction)
+
+    if base.is_empty():
+        return []
+
+    # Extract only the columns we need. Keep polars' native date
+    # conversion so callers get datetime.date objects ready for the
+    # market_regime classifier.
+    trade_date_expr = et_date_expr("timestamp").alias("trade_date")
+    slim = base.select(
+        [
+            trade_date_expr,
+            pl.col("signal_direction"),
+            pl.col(mfe_col).alias("mfe"),
+            pl.col(mae_col).alias("mae"),
+        ]
+    )
+    return slim.to_dicts()
+
+
 def run_holdout_validation_for_candidates(
     *,
     promoted: pl.DataFrame,
@@ -100,7 +151,30 @@ def run_holdout_validation_for_candidates(
     min_calibration_signals: int,
     min_holdout_signals: int,
     evaluation_window: int | None = None,
+    trade_rows_sink: list[dict[str, object]] | None = None,
+    catalog_key_fn: Callable[[dict[str, object]], str] | None = None,
 ) -> list[dict[str, object]]:
+    """Run holdout validation over promoted candidates.
+
+    Optional hooks for per-regime performance slicing (W2.1 in the
+    trade_lab architecture) without changing the existing return
+    shape:
+
+      * ``trade_rows_sink``: if provided, realized signal rows from the
+        out-of-sample ``holdout_df`` are appended here. Each row is a
+        dict ready to feed into
+        ``src.research.catalog_regime_performance.TradeRow``.
+      * ``catalog_key_fn``: called with each candidate row dict to
+        derive the ``catalog_key`` attached to the trade rows. If
+        ``None`` (the default), a placeholder key ``"{ticker}::{strategy}::{direction}"``
+        is used — fine for unit tests and standalone callers but not
+        for the real nightly pipeline, which should pass in a
+        callable that builds the same catalog_key Mala's playbook
+        catalog uses (``playbooks._build_catalog_key``).
+
+    Both hooks are no-ops when ``trade_rows_sink`` is None, so
+    existing callers are unaffected.
+    """
     detail_rows: list[dict[str, object]] = []
     resolved_window = resolve_evaluation_window(metrics, evaluation_window)
     snapshot_windows = canonical_directional_snapshot_windows(
@@ -177,6 +251,34 @@ def run_holdout_validation_for_candidates(
                 and holdout_signals >= min_holdout_signals
                 and float(holdout_exp) >= 0.0
             )
+
+            if trade_rows_sink is not None:
+                # Emit one row per realized out-of-sample signal for
+                # per-regime slicing downstream. We only do this once
+                # per (candidate, direction) because per-cost iteration
+                # shares the same signal set.
+                if cost_bps == costs[0]:
+                    if catalog_key_fn is not None:
+                        key = catalog_key_fn(candidate)
+                    else:
+                        key = f"{ticker}::{strategy_name}::{direction}"
+                    raw_rows = extract_signal_trade_rows(
+                        holdout_df,
+                        direction=direction,
+                        evaluation_window=resolved_window,
+                    )
+                    for raw in raw_rows:
+                        trade_rows_sink.append(
+                            {
+                                "catalog_key": key,
+                                "ticker": ticker,
+                                "strategy": strategy_name,
+                                "direction": direction,
+                                "trade_date": raw["trade_date"],
+                                "mfe": float(raw["mfe"]),
+                                "mae": float(raw["mae"]),
+                            }
+                        )
             detail_rows.append(
                 {
                     "ticker": ticker,
