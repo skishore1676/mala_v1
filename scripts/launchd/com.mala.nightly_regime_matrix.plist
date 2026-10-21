@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mala.nightly_regime_matrix</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>HOME_PLACEHOLDER/kg_env/projects/mala_v1/scripts/launchd/run_nightly_regime_matrix.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>HOME_PLACEHOLDER/kg_env/projects/mala_v1</string>
+
+    <!-- Run nightly at 02:00 local time. launchd catches up if the
+         machine was asleep at the scheduled moment. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Prevent launchd from restarting the script if it exits with an
+         error — it's a one-shot nightly, not a daemon. -->
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/kg_env/projects/mala_v1/logs/nightly_regime_matrix.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/kg_env/projects/mala_v1/logs/nightly_regime_matrix.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+</dict>
+</plist>
